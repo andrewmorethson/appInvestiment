@@ -1,0 +1,301 @@
+:root{
+  --bg:#0b1220; --card:#0f1a2b; --card2:#0c1626; --bd:rgba(255,255,255,.10);
+  --txt:#e8f0ff; --mut:rgba(232,240,255,.72);
+  --blue:#3b82f6; --blue2:#2563eb; --green:#22c55e; --red:#ef4444; --amber:#f59e0b;
+  --slate:#94a3b8;
+  --shadow: 0 18px 50px rgba(0,0,0,.35);
+  --shadow2: 0 10px 24px rgba(0,0,0,.28);
+}
+*{box-sizing:border-box}
+body{margin:0; font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial;
+  background:radial-gradient(1200px 800px at 20% -10%, rgba(59,130,246,.20), transparent 60%),
+             radial-gradient(900px 650px at 90% 10%, rgba(245,158,11,.10), transparent 50%),
+             var(--bg);
+  color:var(--txt)
+}
+.wrap{max-width:1280px; margin:0 auto; padding:18px 16px 60px}
+.topbar{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 16px;
+  border:1px solid var(--bd);
+  background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+  border-radius:16px; position:sticky; top:12px; z-index:10; backdrop-filter: blur(10px)
+}
+.brand{display:flex; gap:12px; align-items:center}
+.logo{width:36px; height:36px; border-radius:12px; background:rgba(59,130,246,.18);
+  border:1px solid rgba(59,130,246,.35); display:grid; place-items:center; font-weight:800; color:#9cc1ff
+}
+.title b{display:block; font-size:14px; letter-spacing:.2px}
+.title span{display:block; font-size:12px; color:var(--mut)}
+.pill{display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--bd); border-radius:999px; background:rgba(0,0,0,.14); flex-wrap:wrap}
+.dot{width:10px;height:10px;border-radius:999px;background:rgba(245,158,11,.95); box-shadow:0 0 0 6px rgba(245,158,11,.10)}
+.dot.on{background:rgba(34,197,94,.95); box-shadow:0 0 0 6px rgba(34,197,94,.10)}
+.dot.off{background:rgba(148,163,184,.80); box-shadow:0 0 0 6px rgba(148,163,184,.10)}
+.small{font-size:12px;color:var(--mut)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+
+.grid{display:grid; grid-template-columns: 1fr; gap:14px; margin-top:14px}
+@media (min-width: 980px){
+  .grid{grid-template-columns: 1.10fr .90fr}
+  .controlsCard{grid-column: 1 / -1}
+  .logsCard{grid-column: 1 / -1}
+}
+
+.card{border:1px solid var(--bd); background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)); border-radius:18px; padding:14px; box-shadow: var(--shadow2); transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease}
+.card h2{margin:0 0 10px; font-size:14px; letter-spacing:.2px}
+
+.card:hover{transform: translateY(-1px); box-shadow: var(--shadow); border-color: rgba(59,130,246,.25)}
+
+.sectionTitle{display:flex; align-items:center; justify-content:space-between; gap:10px; margin:10px 0 8px}
+.sectionTitle b{font-size:12px; color:rgba(232,240,255,.85)}
+.chip{font-size:12px; padding:4px 10px; border-radius:999px; border:1px solid var(--bd); color:var(--mut); background:rgba(0,0,0,.10)}
+.chip.warn{border-color:rgba(245,158,11,.55); color:rgba(245,158,11,.95); background:rgba(245,158,11,.12)}
+
+.row{display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end}
+label{display:flex; flex-direction:column; gap:6px; font-size:12px; color:var(--mut); min-width:170px}
+input,select{height:40px; padding:0 12px; border-radius:12px; border:1px solid var(--bd); background:rgba(0,0,0,.16); color:var(--txt); outline:none}
+input:focus,select:focus{border-color:rgba(59,130,246,.65); box-shadow:0 0 0 4px rgba(59,130,246,.12)}
+input:disabled,select:disabled{
+  opacity:.55;
+  cursor:not-allowed;
+  filter:saturate(.7);
+}
+
+.btns{display:flex; flex-wrap:wrap; gap:10px; align-items:center}
+button{height:40px; padding:0 14px; border:0; border-radius:12px; cursor:pointer; font-weight:800; color:#fff;
+  background:linear-gradient(180deg, var(--blue), var(--blue2)); box-shadow:0 10px 30px rgba(37,99,235,.20); transition: transform .12s ease, filter .12s ease, box-shadow .12s ease}
+button.secondary{background:rgba(255,255,255,.10); box-shadow:none}
+button.danger{background:linear-gradient(180deg, rgba(239,68,68,.95), rgba(185,28,28,.95)); box-shadow:0 10px 30px rgba(239,68,68,.18)}
+button:disabled{opacity:.55; cursor:not-allowed}
+.closeBtn{
+  height:40px;
+  padding:0 14px;
+  border-radius:12px;
+  border:1px solid var(--bd);
+  background:transparent;
+  box-shadow:none;
+  font-weight:800;
+}
+.closeBtn.closeLoss{
+  border-color: rgba(239,68,68,.85);
+  color: rgba(255,165,165,.95);
+}
+.closeBtn.closeNeutral{
+  border-color: rgba(148,163,184,.85);
+  color: rgba(203,213,225,.95);
+}
+.closeBtn.closeProfit{
+  border-color: rgba(34,197,94,.85);
+  color: rgba(134,239,172,.95);
+}
+
+button:not(:disabled):hover{transform: translateY(-1px); filter: brightness(1.05)}
+button:not(:disabled):active{transform: translateY(0px); filter: brightness(.98)}
+
+.kpi{display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:10px}
+@media (min-width: 680px){ .kpi{grid-template-columns: repeat(4, minmax(0,1fr));} }
+.k{padding:12px; border:1px solid var(--bd); background:rgba(0,0,0,.14); border-radius:14px}
+.k .t{font-size:11px; color:var(--mut)}
+.k .v{font-size:20px; font-weight:900; margin-top:4px}
+
+.banner{display:none; margin-top:12px; padding:12px 14px; border-radius:16px; border:1px solid rgba(239,68,68,.38);
+  background:linear-gradient(180deg, rgba(239,68,68,.18), rgba(0,0,0,.10));
+}
+.banner.on{display:block}
+.banner b{display:block; font-size:14px}
+.banner span{display:block; color:rgba(255,255,255,.85); margin-top:2px}
+
+.list{display:flex; flex-direction:column; gap:10px}
+.item{border:1px solid var(--bd); background:rgba(0,0,0,.14); border-radius:14px; padding:12px}
+.item .head{display:flex; justify-content:space-between; gap:10px; align-items:center}
+
+.tag{font-size:12px; padding:4px 10px; border-radius:999px; border:1px solid var(--bd); color:var(--mut)}
+.tag.buy{border-color:rgba(34,197,94,.35); color:rgba(34,197,94,.95)}
+.tag.sell{border-color:rgba(239,68,68,.35); color:rgba(255,165,165,.95)}
+.tag.ask{border-color:rgba(245,158,11,.35); color:rgba(245,158,11,.95)}
+.tag.lock{border-color:rgba(239,68,68,.35); color:rgba(239,68,68,.95)}
+.tag.ok{border-color:rgba(34,197,94,.35); color:rgba(34,197,94,.95)}
+.tag.info{border-color:rgba(59,130,246,.35); color:#9cc1ff}
+
+.logs{height:auto; min-height:160px; max-height: min(60vh, 520px); overflow:auto; padding:12px; border-radius:14px; border:1px solid var(--bd); background:rgba(0,0,0,.18); color:rgba(232,240,255,.88)}
+.logs div{padding:4px 0; border-bottom:1px dashed rgba(255,255,255,.06)}
+
+.rightCol{display:flex; flex-direction:column; gap:14px}
+.hint{font-size:12px; color:var(--mut); line-height:1.35}
+
+.seg{display:flex; gap:8px; flex-wrap:wrap}
+.segbtn{height:38px; padding:0 12px; border-radius:999px; border:1px solid var(--bd); background:rgba(0,0,0,.12); color:var(--txt); font-weight:900; cursor:pointer; box-shadow:none}
+.segbtn:hover{border-color:rgba(59,130,246,.55)}
+.segbtn.active{background:linear-gradient(180deg, rgba(59,130,246,.95), rgba(37,99,235,.95)); border-color:rgba(59,130,246,.75); box-shadow:0 12px 28px rgba(37,99,235,.20)}
+#profileSeg .segbtn.active{
+  transform: translateY(-1px) scale(1.02);
+  outline: 2px solid rgba(156,193,255,.85);
+  outline-offset: 1px;
+}
+.presetCompare{
+  margin-top:10px;
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap:10px;
+}
+.presetCard{
+  border:1px solid var(--bd);
+  border-radius:14px;
+  padding:10px 12px;
+  background:rgba(0,0,0,.14);
+}
+.presetCardBtn{
+  width:100%;
+  height:auto;
+  text-align:left;
+  font-weight:inherit;
+  color:var(--txt);
+  box-shadow:none;
+  cursor:pointer;
+}
+.presetCardBtn:hover{
+  transform: translateY(-1px);
+  border-color: rgba(59,130,246,.45);
+}
+.presetCard .head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:6px;
+}
+.presetCard.active{
+  border-color: rgba(59,130,246,.70);
+  background: linear-gradient(180deg, rgba(59,130,246,.14), rgba(0,0,0,.16));
+  box-shadow:0 10px 24px rgba(37,99,235,.15);
+}
+.presetCardBtn:disabled{
+  opacity:.55;
+  cursor:not-allowed;
+}
+
+/* progress -100..100 */
+.pwrap{margin-top:10px}
+.pbar{height:12px;border-radius:999px;border:1px solid var(--bd);background:rgba(0,0,0,.22);overflow:hidden;position:relative}
+.pbar .mid{position:absolute;left:50%;top:-2px;bottom:-2px;width:2px;background:rgba(148,163,184,.75)}
+.pbar .fillL,.pbar .fillR{position:absolute;top:0;bottom:0;opacity:.95}
+/* negativo: preenche para a esquerda a partir do meio */
+.pbar .fillL{right:50%;width:0;background:linear-gradient(270deg, rgba(239,68,68,.95), rgba(245,158,11,.95))}
+/* positivo: preenche para a direita a partir do meio */
+.pbar .fillR{left:50%;width:0;background:linear-gradient(90deg, rgba(245,158,11,.95), rgba(34,197,94,.95))}
+.pmeta{display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:6px; font-size:11px; color:rgba(232,240,255,.78)}
+.pmeta b{color:rgba(232,240,255,.96)}
+.pmeta span{white-space:nowrap}
+
+/* minimize controls + focus mode */
+.collapsed .controlsBody{display:none}
+.controlsCard, .focusDeck{
+  transition: opacity .26s ease, transform .26s ease, max-height .26s ease;
+  will-change: opacity, transform, max-height;
+}
+
+.focusDeck{
+  /* always visible: show compact panel when focus is OFF, expanded when ON */
+  opacity:1;
+  transform: translateY(0);
+  max-height:2200px;
+  overflow:visible;
+  padding:12px;
+  border:1px solid var(--bd);
+  background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.01));
+  pointer-events:auto;
+}
+.focusMode .focusDeck{
+  /* when Focus mode is ON keep existing fuller styling */
+  padding:14px;
+  background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+}
+.focusMode .controlsCard{
+  opacity:0;
+  transform: translateY(-8px);
+  max-height:0;
+  overflow:hidden;
+  padding:0;
+  border:0;
+  background: transparent;
+  pointer-events:none;
+}
+.focusMode .topHint{display:none}
+.focusMode .wrap{max-width:1400px}
+
+.focusContent{margin-top:12px}
+.focusGrid{display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:10px}
+.focusK{padding:12px; border:1px solid var(--bd); background:rgba(0,0,0,.14); border-radius:14px}
+.focusK .t{font-size:11px; color:var(--mut)}
+.focusK .v{font-size:18px; font-weight:900; margin-top:4px}
+.focusList{display:flex; flex-direction:column; gap:10px}
+.focusItem{border:1px solid var(--bd); background:rgba(0,0,0,.14); border-radius:14px; padding:12px}
+.focusItem .head{display:flex; justify-content:space-between; gap:10px; align-items:center}
+.mini{font-size:11px; color:rgba(232,240,255,.78)}
+
+/* focus panel */
+.focusPanel{display:none; margin-bottom:12px; padding:12px; border-radius:14px; border:1px solid rgba(59,130,246,.25);
+  background:linear-gradient(180deg, rgba(59,130,246,.12), rgba(0,0,0,.08));
+}
+.focusMode .focusPanel{display:block}
+.focusPanelHead{display:flex; align-items:center; justify-content:space-between; gap:10px}
+.focusPanelBtns{display:flex; flex-wrap:wrap; gap:10px; margin-top:10px}
+
+/* focus controls panel inside focus deck */
+.focusControlsPanel{display:none; flex-wrap:wrap; gap:10px; align-items:center; margin:8px 0 6px}
+.focusControlsPanel button{height:36px; padding:0 12px}
+
+/* show focus controls only when focus mode is ON */
+.focusMode .focusDeck .focusControlsPanel{display:flex}
+
+
+/* =============================
+   Lock modal
+============================= */
+.modalOverlay{
+  position:fixed; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  padding:24px;
+  background:rgba(0,0,0,.55);
+  backdrop-filter: blur(8px);
+  z-index:1000;
+  opacity:1;
+  transition: opacity .18s ease;
+}
+.modalOverlay.hidden{
+  opacity:0;
+  pointer-events:none;
+}
+.modalCard{
+  width:min(620px, 100%);
+  border:1px solid rgba(255,255,255,.14);
+  border-radius:18px;
+  background:linear-gradient(180deg, rgba(15,26,43,.96), rgba(10,18,32,.96));
+  box-shadow: 0 30px 90px rgba(0,0,0,.55);
+  transform: translateY(0);
+  transition: transform .18s ease;
+}
+.modalOverlay.hidden .modalCard{
+  transform: translateY(8px);
+}
+.modalHead{
+  padding:16px 16px 8px;
+  border-bottom:1px solid rgba(255,255,255,.08);
+}
+.modalTitle{
+  font-weight:900;
+  font-size:16px;
+}
+.modalBody{
+  margin:0;
+  padding:14px 16px;
+  white-space:pre-wrap;
+  color:rgba(232,240,255,.88);
+  font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+  font-size:12px;
+  line-height:1.45;
+}
+.modalActions{
+  display:flex;
+  gap:10px;
+  justify-content:flex-end;
+  padding:12px 16px 16px;
+}

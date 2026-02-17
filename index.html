@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Guardian Quant — Standalone (Paper Trading) · Multi (IA)</title>
+  <link rel="stylesheet" href="./css/styles.css">
+</head>
+
+<body>
+  <div class="wrap" id="rootWrap">
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo">G</div>
+        <div class="title">
+          <b>Guardian Quant — Standalone</b>
+          <span>Paper trading · 100% no browser · Binance klines · Multi moedas + Best-of-day</span>
+        </div>
+      </div>
+      <div class="pill">
+        <span id="dot" class="dot off"></span>
+        <span class="small" id="runLabel">Loop: OFF</span>
+        <span class="small">·</span>
+        <span class="small" id="profileLabel">Preset selecionado: 5m</span>
+        <span class="small">·</span>
+        <span class="small" id="tickLabel">Último tick: —</span>
+        <span class="small">·</span>
+        <span class="small" id="statusLabel">Status: —</span>
+      </div>
+    </div>
+
+    <div class="grid">
+      <!-- CONTROLS -->
+      <div class="card controlsCard" id="controlsCard">
+        <div class="sectionTitle">
+          <h2 style="margin:0">Controles</h2>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+            <span class="chip" id="chipUniverse">Universe: —</span>
+            <span class="chip" id="cfgLockHint">Config: editável</span>
+            
+          </div>
+        </div>
+
+        <div class="btns topHint">
+          <button id="btnStart">Ligar Robô</button>
+          <button id="btnStop" class="secondary" disabled>Parar</button>
+          <button id="btnOnce" class="secondary">Rodar 1x</button>
+          <button id="btnReset" class="secondary">Reset geral</button>
+          <button id="btnUnlock" class="danger" title="Remove qualquer bloqueio ativo (DD ou loss streak)">Desbloquear</button>
+          <button id="btnTestMode" class="secondary">Modo Teste: OFF</button>
+          <button id="btnFocus" class="secondary">Modo Foco: OFF</button>
+        </div>
+
+        <div class="banner" id="lockBanner">
+          <b>🔒 BLOQUEADO</b>
+          <span id="lockReason">Bloqueado por regra de segurança.</span>
+          <div class="small" style="margin-top:6px">
+            Observação: mesmo bloqueado, o sistema <b>continua gerenciando trades abertos</b> (stop/target/trailing/BE/time-stop/parcial),
+            e apenas <b>para de buscar novas entradas</b>.
+          </div>
+        </div>
+
+        <div class="controlsBody" id="controlsBody">
+
+          <!-- 1) Mercado -->
+          <div class="sectionTitle"><b>1) Mercado e Universo</b><span class="chip" id="chipBest">Best-of-day: —</span></div>
+
+          <div class="row">
+            <label>Modo
+              <select id="cfgMode">
+                <option value="ASK">ASK (mostra opções)</option>
+                <option value="AUTO" selected>AUTO (executa)</option>
+              </select>
+            </label>
+
+            <label>Intervalo (klines)
+              <select id="cfgInterval">
+                <option value="1m">1m</option>
+                <option value="3m">3m</option>
+                <option value="5m" selected>5m</option>
+                <option value="15m">15m</option>
+                <option value="30m">30m</option>
+                <option value="1h">1h</option>
+                <option value="2h">2h</option>
+                <option value="4h">4h</option>
+                <option value="6h">6h</option>
+                <option value="12h">12h</option>
+                <option value="1d">1d</option>
+              </select>
+            </label>
+
+            <label>Loop (seg)
+              <input id="cfgLoopSec" type="number" value="10" min="2" max="3600" />
+            </label>
+
+            <label>Klines limit
+              <input id="cfgLimit" type="number" value="300" min="60" max="1000" />
+            </label>
+
+            <label>Multi-moedas
+              <select id="cfgUniverseMode">
+                <option value="SINGLE">1 moeda</option>
+                <option value="CUSTOM">Lista custom</option>
+                <option value="TOPN" selected>Best-of-day (Top N)</option>
+              </select>
+            </label>
+
+            <label>Top N (best-of-day)
+              <input id="cfgTopN" type="number" value="6" min="1" max="20" />
+            </label>
+
+            <label>Atualizar best-of-day (min)
+              <input id="cfgBestRefreshMin" type="number" value="10" min="1" max="60" />
+            </label>
+          </div>
+
+          <div class="row" style="margin-top:10px">
+            <label>Moeda (Single)
+              <select id="cfgSymbolSingle"></select>
+            </label>
+
+            <label>Moedas (Custom)
+              <select id="cfgSymbolCustom" multiple style="height:140px; padding:10px"></select>
+            </label>
+
+            <div class="hint" style="flex:1; min-width:260px">
+              <b>Universo:</b><br/>
+              • <b>1 moeda</b>: opera somente o símbolo selecionado.<br/>
+              • <b>Custom</b>: você escolhe uma lista (CTRL/CMD + clique).<br/>
+              • <b>Best-of-day</b>: Top N por <b>|% change 24h|</b> dentro do Top-50, atualiza no intervalo acima.<br/><br/>
+              <b>Isolamento:</b> cada moeda tem seu próprio cooldown + anti-repetição; uma moeda não “contamina” a outra.
+            </div>
+          </div>
+
+          <!-- 2) Presets por intervalo -->
+          <div class="sectionTitle"><b>2) Presets por Intervalo</b><span class="chip">5m · 15m · 30m (fee/tax aware)</span></div>
+
+          <div class="row">
+            <div style="min-width:420px">
+              <div class="seg" id="profileSeg">
+                <button type="button" class="segbtn active" data-intpreset="5m">5m</button>
+                <button type="button" class="segbtn" data-intpreset="15m">15m</button>
+                <button type="button" class="segbtn" data-intpreset="30m">30m</button>
+              </div>
+              <div class="small" id="profileHint" style="margin-top:6px">Ativo: Preset 5m</div>
+            </div>
+
+            <div class="hint" style="flex:1; min-width:260px">
+              Cada preset reajusta os controles para o intervalo escolhido (risco, ATR, saídas, universo, custos e impostos).<br/>
+              Objetivo: maximizar lucro líquido com filtros de custo de execução e taxa/imposto.
+            </div>
+          </div>
+          <div id="presetCompare" class="presetCompare" aria-live="polite"></div>
+
+          <!-- 3) Risco e travas -->
+          <div class="sectionTitle"><b>3) Risco e Travas</b><span class="chip">DD = baseado em SALDO (cash)</span></div>
+
+          <div class="row">
+            <label>Saldo inicial (USD)
+              <input id="cfgInitialCash" type="number" value="100" min="10" max="10000000" step="10" />
+            </label>
+
+            <label>Risco % por trade (0.1–2.0%) <span class="small">(baseado no saldo)</span>
+              <input id="cfgRiskPct" type="number" value="1.0" min="0.1" max="2" step="0.1" />
+            </label>
+
+            <label>Máx trades abertos (global)
+              <input id="cfgMaxOpen" type="number" value="20" min="1" max="20" />
+            </label>
+
+            <label>Máx daily DD % (saldo)
+              <input id="cfgMaxDailyDD" type="number" value="1.8" min="0.3" max="20" step="0.1" />
+            </label>
+
+            <label>Trava trades repetidos
+              <select id="cfgNoRepeat">
+                <option value="ON" selected>ON</option>
+                <option value="OFF">OFF</option>
+              </select>
+            </label>
+
+            <label>Cooldown por moeda (candles)
+              <input id="cfgCooldownCandles" type="number" value="3" min="0" max="50" />
+            </label>
+          </div>
+
+          <!-- 4) Stops/Targets -->
+          <div class="sectionTitle"><b>4) Stops, Targets e Trailing</b><span class="chip">ATR</span></div>
+
+          <div class="row">
+            <label>ATR period
+              <input id="cfgAtrPeriod" type="number" value="14" min="7" max="50" />
+            </label>
+
+            <label>ATR Stop (x)
+              <input id="cfgAtrStop" type="number" value="2.6" min="0.5" max="8" step="0.1" />
+            </label>
+
+            <label>ATR Target (x)
+              <input id="cfgAtrTarget" type="number" value="3.2" min="0.8" max="12" step="0.1" />
+            </label>
+
+            <label>Trailing ATR (x)
+              <input id="cfgAtrTrail" type="number" value="2.4" min="0" max="12" step="0.1" />
+            </label>
+
+            <label>Break-even (R ≥)
+              <input id="cfgBreakEvenR" type="number" value="1.5" min="0" max="8" step="0.1" />
+            </label>
+          </div>
+
+          <!-- 5) Saídas avançadas -->
+          <div class="sectionTitle"><b>5) Saídas avançadas</b><span class="chip">Time-stop + Parcial + BE pós-parcial</span></div>
+
+          <div class="row">
+            <label>Time-stop
+              <select id="cfgTimeStopOn">
+                <option value="ON" selected>ON</option>
+                <option value="OFF">OFF</option>
+              </select>
+            </label>
+            <label>Time-stop (candles)
+              <input id="cfgTimeStopCandles" type="number" value="18" min="1" max="200" />
+            </label>
+
+            <label>Parcial
+              <select id="cfgPartialOn">
+                <option value="ON" selected>ON</option>
+                <option value="OFF">OFF</option>
+              </select>
+            </label>
+            <label>Parcial em (R ≥)
+              <input id="cfgPartialAtR" type="number" value="1.2" min="0.1" max="10" step="0.1" />
+            </label>
+            <label>Parcial (% fecha)
+              <input id="cfgPartialPct" type="number" value="35" min="1" max="90" step="1" />
+            </label>
+
+            <label>BE após parcial
+              <select id="cfgBEAfterPartialOn">
+                <option value="ON" selected>ON</option>
+                <option value="OFF">OFF</option>
+              </select>
+            </label>
+          </div>
+
+          <!-- 6) Profit-only -->
+          <div class="sectionTitle"><b>6) Profit-only</b><span class="chip">Manual + Auto</span></div>
+
+          <div class="row">
+            <label>Auto fechar com lucro
+              <select id="cfgAutoProfitOn">
+                <option value="ON" selected>ON</option>
+                <option value="OFF">OFF</option>
+              </select>
+            </label>
+
+            <label>Lucro mínimo auto (%)
+              <input id="cfgAutoProfitPct" type="number" value="0.45" min="0.05" max="10" step="0.05" />
+            </label>
+
+            <label>Minimizar controles ao ligar
+              <select id="cfgAutoMinimize">
+                <option value="ON" selected>ON</option>
+                <option value="OFF">OFF</option>
+              </select>
+            </label>
+          </div>
+
+          
+          <!-- 7) Taxas e Impostos -->
+          <div class="sectionTitle"><b>7) Taxas e Impostos</b><span class="chip">simulação (ajustável)</span></div>
+
+          <div class="row">
+            <label>Taxa Binance (Spot)
+              <select id="cfgFeeMode">
+                <option value="STANDARD">Padrão 0.10%</option>
+                <option value="BNB" selected>Com BNB 0.075%</option>
+                <option value="CUSTOM">Custom</option>
+              </select>
+            </label>
+
+            <label>Taxa custom (%)
+              <input id="cfgFeePctCustom" type="number" value="0.10" min="0" max="1" step="0.01" />
+            </label>
+            <label>Spread (bps)
+              <input id="cfgExecSpreadBps" type="number" value="4" min="0" max="100" step="0.5" />
+            </label>
+            <label>Slippage (bps)
+              <input id="cfgExecSlippageBps" type="number" value="2" min="0" max="200" step="0.5" />
+            </label>
+            <label>Latência (ms)
+              <input id="cfgExecLatencyMs" type="number" value="200" min="0" max="10000" step="50" />
+            </label>
+            <label>Impacto latência (bps/s)
+              <input id="cfgExecLatencyBpsPerSec" type="number" value="1.0" min="0" max="50" step="0.1" />
+            </label>
+            <label>Edge mínimo acima das taxas (%)
+              <input id="cfgEdgeMinPct" type="number" value="0.10" min="0" max="5" step="0.05" />
+            </label>
+
+
+
+            <label>Reservar imposto
+              <select id="cfgTaxOn">
+                <option value="ON" selected>ON</option>
+                <option value="OFF">OFF</option>
+              </select>
+            </label>
+
+            <label>Alíquota (%)
+              <input id="cfgTaxPct" type="number" value="15" min="0" max="50" step="0.5" />
+            </label>
+
+            <label>Abater do saldo (paper)
+              <select id="cfgTaxApplyCash">
+                <option value="OFF">OFF</option>
+                <option value="ON" selected>ON</option>
+              </select>
+            </label>
+            <label>Auditoria remota
+              <select id="cfgAuditOn">
+                <option value="OFF">OFF</option>
+                <option value="ON" selected>ON</option>
+              </select>
+            </label>
+            <label>Flush auditoria (s)
+              <input id="cfgAuditFlushSec" type="number" value="8" min="2" max="120" step="1" />
+            </label>
+          </div>
+
+          <div class="hint" style="margin-top:10px">
+            <b>Como a regra funciona aqui (prático):</b><br/>
+            • Cada execução (OPEN/PARTIAL/CLOSE) desconta a <b>taxa</b> do saldo imediatamente (como na Binance).<br/>
+            • O <b>imposto</b> é calculado sobre o <b>lucro líquido</b> daquele fechamento (PnL − taxa de entrada alocada − taxa de saída).<br/>
+            • “Reservar imposto” acumula o valor em “Imposto reservado”. Se você ligar “Abater do saldo”, ele também reduz o saldo (paper) na hora.<br/>
+          </div>
+
+<div class="hint" style="margin-top:10px">
+            <b>Execução:</b><br/>
+            • <b>AUTO:</b> abre automaticamente <b>score ≥ 7</b> (BUY/SELL).<br/>
+            • <b>ASK:</b> cria opção em <b>[7,9)</b> e executa automático em <b>score ≥ 9</b>.<br/>
+            • <b>&lt;7:</b> ignora.<br/>
+            • <b>Bloqueado:</b> para novas entradas, mas <b>continua gerenciando trades abertos</b> até fechar tudo.<br/>
+          </div>
+        </div>
+      </div>
+
+      <!-- FOCUS DECK (aparece no Modo Foco) -->
+      <div class="card focusDeck" id="focusDeck">
+        <div class="sectionTitle">
+          <h2 style="margin:0">Modo Foco — Widgets</h2>
+          <span class="chip" id="focusDeckHint">Escolha o que ver no painel</span>
+          <button id="btnFocusHeader" class="secondary" style="margin-left:8px">Modo Foco: OFF</button>
+        </div>
+
+        <!-- Focus controls panel (copied from Controles) -->
+        <div class="focusControlsPanel">
+          <!-- duplicated core controls -->
+          <button id="btnFocusStart">Ligar Robô</button>
+          <button id="btnFocusStop" class="secondary" disabled>Parar</button>
+          <button id="btnFocusTestMode" class="secondary">Modo Teste: OFF</button>
+          <button id="btnFocusOnce" class="secondary">Rodar 1x</button>
+          <button id="btnFocusReset" class="secondary">Reset geral</button>
+        </div>
+
+        <div class="seg" id="focusTabs" aria-label="Focus widgets">
+          <button type="button" class="segbtn active" data-tab="TRADES">Trades</button>
+          <button type="button" class="segbtn" data-tab="PENDING">Pendentes</button>
+          <button type="button" class="segbtn" data-tab="MOVERS">Top movers</button>
+          <button type="button" class="segbtn" data-tab="STATS">Stats</button>
+          <button type="button" class="segbtn" data-tab="FEES">Taxas</button>
+        </div>
+
+        <div id="focusContent" class="focusContent"></div>
+        </div>
+
+      <!-- RIGHT -->
+      <div class="rightCol">
+        <div class="card">
+          <h2>Carteira (Paper)</h2>
+
+          <!-- Painel Modo Foco movido para o Focus Deck; removido daqui -->
+
+          <div class="kpi">
+            <div class="k"><div class="t">Caixa atual (USD)</div><div class="v" id="kCash">$100.00</div></div>
+            <div class="k"><div class="t">Equity (USD)</div><div class="v" id="kEquity">$100.00</div></div>
+            <div class="k"><div class="t">P/L total</div><div class="v" id="kPL">$0.00</div></div>
+            <div class="k"><div class="t">Daily DD (saldo)</div><div class="v" id="kDD">0.00%</div></div>
+          </div>
+          <div class="kpi" style="margin-top:10px">
+            <div class="k"><div class="t">Wins / Losses</div><div class="v" id="kWL">0 / 0</div></div>
+            <div class="k"><div class="t">Loss consecutivos</div><div class="v" id="kStreak">0</div></div>
+            <div class="k"><div class="t">Open trades</div><div class="v" id="kOpen">0 / 20</div></div>
+            <div class="k"><div class="t">Bloqueio</div><div class="v" id="kLock">OFF</div></div>
+          </div>
+          <div class="kpi" style="margin-top:10px">
+            <div class="k"><div class="t">Realizado (P/L)</div><div class="v" id="kRealized">$0.00</div></div>
+            <div class="k"><div class="t">Ganho bruto</div><div class="v" id="kGrossWin">$0.00</div></div>
+            <div class="k"><div class="t">Perda bruta</div><div class="v" id="kGrossLoss">$0.00</div></div>
+            <div class="k"><div class="t">Não realizado</div><div class="v" id="kUnrealized">$0.00</div></div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <h2>Status</h2>
+          <div class="kpi" style="grid-template-columns: repeat(2, minmax(0,1fr));">
+            <div class="k"><div class="t">Símbolo (tick)</div><div class="v" id="kSym">—</div></div>
+            <div class="k"><div class="t">Último preço</div><div class="v" id="kPrice">—</div></div>
+          </div>
+          <div class="kpi" style="grid-template-columns: repeat(2, minmax(0,1fr)); margin-top:10px">
+            <div class="k"><div class="t">Sinal</div><div class="v" id="kSignal">—</div></div>
+            <div class="k"><div class="t">Score</div><div class="v" id="kScore">—</div></div>
+          </div>
+        
+          <div class="k" style="margin-top:10px">
+            <div class="t">Motivos</div>
+            <div class="v mono" style="font-size:13px" id="kReasons">—</div>
+          </div>
+        
+          <div class="k" style="margin-top:10px">
+            <div class="t">Best-of-day (Top N)</div>
+            <div class="v mono" style="font-size:13px" id="kBestList">—</div>
+          </div>
+        </div>
+        
+        <div class="card" id="feesCard">
+          <h2>Taxas e Impostos</h2>
+          <div class="kpi">
+            <div class="k"><div class="t">Bruto equivalente (USD)</div><div class="v" id="kGrossUsd">$100.00</div></div>
+            <div class="k"><div class="t">Taxas acumuladas (USD)</div><div class="v" id="kFees">$0.00</div></div>
+            <div class="k"><div class="t">IR em provisão (USD)</div><div class="v" id="kTaxRes">$0.00</div></div>
+            <div class="k"><div class="t">Líquido após provisão (USD)</div><div class="v" id="kNet">$100.00</div></div>
+          </div>
+          
+          <div class="kpi" style="margin-top:10px">
+            <div class="k"><div class="t">IR já debitado (USD)</div><div class="v" id="kTaxPaid">$0.00</div></div>
+            <div class="k"><div class="t">Off-ramp spread (estim.)</div><div class="v" id="kOffSpread">$0.00</div></div>
+            <div class="k"><div class="t">Taxa saque PIX (BRL)</div><div class="v" id="kPixFeeBrl">R$ 0,00</div></div>
+            <div class="k"><div class="t">Líquido após saque (estim.)</div><div class="v" id="kNetAfterOff">$0.00</div></div>
+          </div>
+
+          <div class="hint" style="margin-top:10px">
+            • <b>Bruto equivalente</b> reconstrói o valor antes de taxas e IR já debitado.<br/>
+            • <b>IR reservado</b> é a provisão para imposto quando “Abater do saldo” está OFF.<br/>
+            • Com “Abater do saldo” ON, o imposto entra em <b>IR abatido do saldo</b> e já reduz o caixa.<br/>
+            • <b>Líquido após provisão</b> = caixa atual − IR reservado (se houver).<br/>
+            • <b>Após saque</b> estima spread + taxa PIX (se configurados).
+          </div>
+        </div>
+
+    </div>
+
+    <!-- ASK (módulo integrado ao Focus Deck) - removido -->
+
+    <!-- OPEN (módulo integrado ao Focus Deck) - removido -->
+
+    <!-- LOGS -->
+    <div class="card logsCard" style="margin-top:14px">
+      <div class="head" style="display:flex; align-items:center; justify-content:space-between; gap:10px">
+        <h2 style="margin:0">Logs</h2>
+        <div class="small" id="lastTickSmall">—</div>
+      </div>
+      <div class="logs mono" id="logs"></div>
+    </div>
+  </div>
+
+  <script type="module" src="./js/app.js"></script>
+
+  <!-- LOCK MODAL -->
+  <div id="lockModal" class="modalOverlay hidden" role="dialog" aria-modal="true" aria-labelledby="lockModalTitle">
+    <div class="modalCard">
+      <div class="modalHead">
+        <div class="modalTitle" id="lockModalTitle">🚨 Sistema bloqueado</div>
+      </div>
+      <pre class="modalBody" id="lockModalBody"></pre>
+      <div class="modalActions">
+        <button class="secondary" id="lockModalGoControls" type="button">Ir para Controles</button>
+        <button id="lockModalClose" type="button">Entendi</button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
