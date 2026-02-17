@@ -25,6 +25,8 @@ export const S = {
 
   // runtime state
   profile: 'IA_AVANCADO',
+  selectedPresetId: 'NONE',
+  selectedPresetName: 'Sem preset extra',
   intervalPreset: '5m',
   minRR: 1.15,
   mtfConfirmOn: true,
@@ -69,6 +71,22 @@ export const S = {
   wins: 0,
   losses: 0,
   lossStreak: 0,
+  netLossStreak: 0,
+
+  // preset guards / rolling stats
+  highWatermarkCash: 100,
+  tradesWeekKey: null,
+  tradesThisWeek: 0,
+  dayTurnoverUsd: 0,
+  turnoverDayKey: null,
+  closedTradesNet: [],
+  riskCutActive: false,
+  riskCutRemainingTrades: 0,
+  riskCutAnchorHighWatermark: null,
+  killSwitchUntilTs: 0,
+  killSwitchReason: '',
+  lastRollingExpectancyUsd: null,
+  lastRollingWinRate: null,
 
   locked: false,
   lockReason: '',

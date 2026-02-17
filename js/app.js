@@ -15,12 +15,13 @@ import { fetchKlines, parseKlines, fetch24hTickers } from './binance.js';
 import { resolveTradeFeePct } from './fees.js';
 import { EMA, SMA } from './indicators.js';
 import { createAuditClient } from './audit.js';
+import { PRESETS, applyPreset } from './presets.js';
 import {
   tradeKey, canPassTradeGuard, markTradeGuard,
   ddPctCash, canTradeNew,
   closeTrade,
   openTradeFromIdea, updateOpenTradesForSymbol,
-  buildDecision, applyPnL
+  buildDecision, applyPnL, computeRollingEdge
 } from './engine.js';
 import { getEl, logFactory, updateUI, renderPending, renderOpen, renderFocusDeck, bestOfDayLabel } from './ui.js';
 
@@ -35,6 +36,7 @@ const log = (msg) => {
 
 // UI: agrupa renders para no máximo 1x por frame
 const scheduleRepaint = rafDebounce(() => repaint());
+const PRESET_STORAGE_KEY = 'guardian_quant_selected_preset';
 
 const INTERVAL_PRESETS = {
   '5m': {
@@ -259,6 +261,7 @@ function applyInitialCashInput(silent = false){
   S.cash = nextCash;
   S.dayAnchorCash = nextCash;
   S.dayPeakCash = nextCash;
+  S.highWatermarkCash = nextCash;
   S._dayKey = null;
   if (!silent){
     log(`Saldo inicial aplicado: ${fmtUSD(nextCash)}.`);
@@ -349,6 +352,47 @@ function applyIntervalPreset(presetKey, silent = false){
   repaint();
 }
 
+function loadSelectedPresetId(){
+  try{
+    const saved = localStorage.getItem(PRESET_STORAGE_KEY);
+    if (saved && PRESETS[saved]) return saved;
+  } catch(_e){
+    // ignore storage issues
+  }
+  return 'NONE';
+}
+
+function persistSelectedPresetId(id){
+  try{
+    localStorage.setItem(PRESET_STORAGE_KEY, id || 'NONE');
+  } catch(_e){
+    // ignore storage issues
+  }
+}
+
+function applySelectedPresetId(id, silent = false){
+  const nextId = (id && PRESETS[id]) ? id : 'NONE';
+  S.selectedPresetId = nextId;
+  S.selectedPresetName = nextId === 'NONE' ? 'Sem preset extra' : PRESETS[nextId].name;
+  persistSelectedPresetId(nextId);
+  const node = document.getElementById('cfgStrategyPreset');
+  if (node && node.value !== nextId) node.value = nextId;
+  if (!silent){
+    log(`[PRESET_STRATEGY] ${S.selectedPresetName} (${nextId})`);
+  }
+  repaint();
+}
+
+function initStrategyPresetSelector(){
+  const node = document.getElementById('cfgStrategyPreset');
+  if (!node) return;
+  node.innerHTML = [
+    `<option value="NONE">Sem preset extra</option>`,
+    ...Object.values(PRESETS).map((p) => `<option value="${p.id}">${p.name}</option>`)
+  ].join('');
+  node.value = S.selectedPresetId || 'NONE';
+}
+
 function applyParamTooltips(){
   for (const [id, text] of Object.entries(PARAM_TOOLTIPS)){
     const node = document.getElementById(id);
@@ -379,6 +423,206 @@ function renderPresetComparison(){
       </button>
     `;
   }).join('');
+}
+
+function getIsoWeekKey(tsMs = Date.now()){
+  const d = new Date(tsMs);
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+function refreshWeeklyCounter(nowTs = Date.now()){
+  const key = getIsoWeekKey(nowTs);
+  if (S.tradesWeekKey !== key){
+    S.tradesWeekKey = key;
+    S.tradesThisWeek = 0;
+  }
+}
+
+function refreshTurnoverDay(nowTs = Date.now()){
+  const d = new Date(nowTs);
+  const dayKey = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  if (S.turnoverDayKey !== dayKey){
+    S.turnoverDayKey = dayKey;
+    S.dayTurnoverUsd = 0;
+  }
+}
+
+function refreshHighWatermarkCash(){
+  const cur = Number(S.cash || 0);
+  S.highWatermarkCash = Math.max(Number(S.highWatermarkCash || cur), cur);
+}
+
+function getDrawdownFromHigh(){
+  const high = Math.max(1e-9, Number(S.highWatermarkCash || S.cash || 1));
+  const cur = Number(S.cash || 0);
+  return Math.max(0, (high - cur) / high);
+}
+
+function estimateAtrSeries(highs, lows, closes, p = 14){
+  const out = new Array(closes.length).fill(null);
+  if (!Array.isArray(closes) || closes.length < p + 1) return out;
+  const trs = [];
+  for (let i = 1; i < closes.length; i++){
+    const h = Number(highs[i] || 0);
+    const l = Number(lows[i] || 0);
+    const pc = Number(closes[i - 1] || 0);
+    trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+  }
+  let sum = 0;
+  for (let i = 0; i < p; i++) sum += trs[i];
+  let atr = sum / p;
+  out[p] = atr;
+  for (let i = p; i < trs.length; i++){
+    atr = ((atr * (p - 1)) + trs[i]) / p;
+    out[i + 1] = atr;
+  }
+  return out;
+}
+
+function normalizeRiskPctForDisplay(cfg){
+  if (cfg?.riskPctIsFraction) return Number(cfg.riskPct || 0) * 100;
+  return Number(cfg?.riskPct || 0);
+}
+
+function computeDynamicRiskMultiplier(cfg){
+  if (!S.riskCutActive || !cfg?.lossStreakRiskCutOn) return 1;
+  const cut = Number(cfg.lossStreakCutFactor || 0.5);
+  return Math.max(0.1, Math.min(1, cut));
+}
+
+function evaluateTrendGate(dec, series, cfg){
+  if (!cfg.trendOnly) return { ok: true };
+  const n = series.c.length - 1;
+  if (n < 220 || !Number.isFinite(dec.ma200) || !Number.isFinite(dec.atr)){
+    return { ok: false, reason: 'TREND_GATE_INSUF' };
+  }
+  const ma200 = SMA(series.c, 200);
+  const mNow = ma200[n];
+  const mPrev = ma200[Math.max(0, n - 5)];
+  const slope = (Number.isFinite(mNow) && Number.isFinite(mPrev))
+    ? (mNow - mPrev) / Math.max(1e-9, Math.abs(mPrev))
+    : -1;
+  const atrSeries = estimateAtrSeries(series.h, series.l, series.c, cfg.atrPeriod || 14);
+  const atrNow = atrSeries[n];
+  if (!Number.isFinite(atrNow)){
+    return { ok: false, reason: 'TREND_GATE_ATR_INSUF' };
+  }
+  let atrSum = 0;
+  let atrCount = 0;
+  for (let i = Math.max(0, n - 19); i <= n; i++){
+    if (Number.isFinite(atrSeries[i])){
+      atrSum += atrSeries[i];
+      atrCount += 1;
+    }
+  }
+  const atrAvg20 = atrCount ? atrSum / atrCount : atrNow;
+  const atrRatio = atrNow / Math.max(1e-9, atrAvg20);
+
+  const slopeMin = Number(cfg.trendSlopeMin ?? 0);
+  const atrMinRatio = Number(cfg.atrExpansionMinRatio ?? 1.0);
+  const priceAbove = Number(dec.last || 0) > Number(dec.ma200 || 0);
+  if (!priceAbove) return { ok: false, reason: 'TREND_GATE_MA200' };
+  if (!(slope > slopeMin)) return { ok: false, reason: 'TREND_GATE_SLOPE', slope, slopeMin };
+  if (!(atrRatio > atrMinRatio)) return { ok: false, reason: 'TREND_GATE_ATR_EXP', atrRatio, atrMinRatio };
+  return { ok: true, slope, atrRatio };
+}
+
+function evaluateChopGate(dec, series, cfg){
+  if (!cfg.regimeChopBlock) return { ok: true };
+  const n = series.c.length - 1;
+  if (n < 60) return { ok: false, reason: 'CHOP_BLOCK_INSUF' };
+  const ma20 = SMA(series.c, 20);
+  const ma50 = SMA(series.c, 50);
+  const m20 = ma20[n];
+  const m50 = ma50[n];
+  const price = Number(dec.last || 0);
+  const atrPct = Number(dec.atrPct || 0);
+  const trendStrength = Number(dec.trendStrength || 0);
+  const maSep = (Number.isFinite(m20) && Number.isFinite(m50))
+    ? Math.abs(m20 - m50) / Math.max(1e-9, price)
+    : 0;
+  const minTrend = Number(cfg.minTrendStrengthGate ?? 0.0007);
+  const minSep = Number(cfg.minMaSeparationPct ?? 0.0014);
+  const minAtrPct = Number(cfg.minAtrPctGate ?? 0.003);
+
+  if (trendStrength < minTrend) return { ok: false, reason: 'CHOP_BLOCK_TREND', trendStrength, minTrend };
+  if (maSep < minSep) return { ok: false, reason: 'CHOP_BLOCK_MA_SEP', maSep, minSep };
+  if (atrPct < minAtrPct) return { ok: false, reason: 'CHOP_BLOCK_ATR', atrPct, minAtrPct };
+  return { ok: true, trendStrength, maSep, atrPct };
+}
+
+function evaluatePullbackGate(dec, series, cfg){
+  if (!cfg.requirePullbackEntry) return { ok: true };
+  const n = series.c.length - 1;
+  if (n < 55 || !Number.isFinite(dec.atr)) return { ok: false, reason: 'PULLBACK_INSUF' };
+  const ma20 = SMA(series.c, 20);
+  const ma50 = SMA(series.c, 50);
+  const m20 = ma20[n];
+  const m50 = ma50[n];
+  const recentHigh = Math.max(...series.h.slice(Math.max(0, n - 10), n + 1));
+  const zoneByHigh = recentHigh - (0.5 * dec.atr);
+  const zoneByMa = Number.isFinite(m20) && Number.isFinite(m50) ? Math.max(m20, m50) : m20;
+  const zone = Number.isFinite(zoneByMa) ? Math.max(zoneByMa, zoneByHigh) : zoneByHigh;
+  const touchedPullback = Number(series.l[n] || 0) <= zone;
+  const bullBody = Number(series.c[n] || 0) > Number(series.o[n] || 0);
+  const accel = (Number(series.c[n] || 0) - Number(series.o[n] || 0)) > (0.2 * Number(dec.atr || 0));
+  const confirmed = bullBody && accel && (Number(series.c[n] || 0) > Number(series.c[n - 1] || 0));
+  if (!touchedPullback) return { ok: false, reason: 'PULLBACK_NOT_TOUCHED' };
+  if (!confirmed) return { ok: false, reason: 'PULLBACK_NO_CONFIRM' };
+  return { ok: true };
+}
+
+function evaluateEdgeGates(cfg){
+  if (!cfg.edgeGating) return { ok: true };
+  const roll = computeRollingEdge(cfg.edgeWindowTrades || 50);
+  S.lastRollingExpectancyUsd = roll.expectancyUsd;
+  S.lastRollingWinRate = roll.winRate;
+  if (!roll.count || !Number.isFinite(roll.expectancyUsd)){
+    return { ok: false, reason: 'EDGE_INSUF', roll };
+  }
+  const minExp = Number(cfg.minRollingExpectancyUsd || 0);
+  if (roll.expectancyUsd <= minExp){
+    return { ok: false, reason: 'EDGE_EXPECTANCY', roll, minExp };
+  }
+  if (Number.isFinite(Number(cfg.minRollingWinRate))){
+    const minWr = Number(cfg.minRollingWinRate);
+    if (!Number.isFinite(roll.winRate) || roll.winRate < minWr){
+      return { ok: false, reason: 'EDGE_WINRATE', roll, minWr };
+    }
+  }
+  return { ok: true, roll };
+}
+
+function estimateEntrySlippageUsd(entry, qty, cfg){
+  const px = Number(entry || 0);
+  const q = Number(qty || 0);
+  const notional = Math.abs(px * q);
+  const slipRate = Number(cfg.slippageRate || 0);
+  return notional * Math.max(0, slipRate);
+}
+
+function evaluateSlippageKillSwitch(entry, qty, cfg){
+  if (!cfg.maxSlippagePct && !cfg.maxSlippageUsd) return { ok: true };
+  const px = Number(entry || 0);
+  const q = Number(qty || 0);
+  const notional = Math.abs(px * q);
+  const slipUsd = estimateEntrySlippageUsd(px, q, cfg);
+  const slipPct = slipUsd / Math.max(1e-9, notional);
+  const maxSlipPct = Number(cfg.maxSlippagePct || Infinity);
+  const maxSlipUsd = Number(cfg.maxSlippageUsd || Infinity);
+  if (slipPct > maxSlipPct || slipUsd > maxSlipUsd){
+    const barMs = intervalToMs(cfg.interval || '5m');
+    const candles = Math.max(1, Number(cfg.killSwitchCandles || 6));
+    S.killSwitchUntilTs = Date.now() + (barMs * candles);
+    S.killSwitchReason = `KILL_SWITCH_SLIPPAGE pct=${(slipPct * 100).toFixed(3)} usd=${slipUsd.toFixed(2)}`;
+    return { ok: false, reason: S.killSwitchReason };
+  }
+  return { ok: true, slipPct, slipUsd };
 }
 
 // --------- symbols/universe ----------
@@ -489,7 +733,7 @@ const edgeMinPct = Math.max(0, Math.min(5, Number(document.getElementById('cfgEd
   const corrMin = Math.max(0, Math.min(0.99, Number(S.corrMin || 0.72)));
   const corrMaxOpenSameSide = Math.max(1, Math.min(20, Number(S.corrMaxOpenSameSide || 3)));
 
-  return {
+  const rawCfg = {
     interval, loopSec, limit, mode,
     riskPct, maxOpen, maxDailyDD,
     noRepeat, cooldownCandles,
@@ -513,6 +757,8 @@ const edgeMinPct = Math.max(0, Math.min(5, Number(document.getElementById('cfgEd
     preset: S.intervalPreset,
     symbols: getUniverseSymbols()
   };
+  const cfgWithPreset = applyPreset(rawCfg, S.selectedPresetId);
+  return cfgWithPreset;
 }
 
 function resolveRuntimeSymbols(cfg){
@@ -790,16 +1036,16 @@ function checkCorrelationGate(signal, symbol, cfg, series){
 }
 
 // --------- tick ----------
+
 async function tickSymbol(symbol, cfg){
   const runPreset = S.runningProfile || S.intervalPreset || '-';
   const kl = await fetchKlines(symbol, cfg.interval, cfg.limit);
   const series = parseKlines(kl);
   series.interval = cfg.interval;
   updateReturnCache(symbol, cfg.interval, series.c, cfg.corrLookback);
-  const currentKlineTs = series.t[series.t.length-1] || Date.now();
+  const currentKlineTs = series.t[series.t.length - 1] || Date.now();
   const dec = buildDecision(series, cfg);
 
-  // snapshot UI
   S.lastTickTs = Date.now();
   S.lastSymbol = symbol;
   S.lastPrice = dec.last;
@@ -807,14 +1053,12 @@ async function tickSymbol(symbol, cfg){
   S.lastScore = dec.score;
   S.lastReasons = dec.reasons;
 
-  // manage open trades always
   updateOpenTradesForSymbol(symbol, dec.last, cfg, currentKlineTs, log, fmtPx);
-
-  el.tickLabel.textContent = `Último tick: ${new Date(S.lastTickTs).toLocaleTimeString('pt-BR',{hour12:false})}`;
+  el.tickLabel.textContent = `Ultimo tick: ${new Date(S.lastTickTs).toLocaleTimeString('pt-BR',{hour12:false})}`;
   el.lastTickSmall.textContent = el.tickLabel.textContent;
 
-  // blocked: no new entries
   if (S.locked) return;
+  if (Number(S.killSwitchUntilTs || 0) > Date.now()) return;
 
   const gate = canTradeNew(cfg);
   if (!gate.ok){
@@ -822,18 +1066,56 @@ async function tickSymbol(symbol, cfg){
       S.locked = true;
       S.lockType = 'DD';
       S.lockReason = gate.reason;
-      log(`🔒 BLOQUEADO: ${gate.reason}`);
+      log(`[GATE][BASE_DD] ${gate.reason}`);
     }
     return;
   }
 
-  // cooldown per symbol
+  refreshWeeklyCounter();
+  if (Number.isFinite(Number(cfg.maxTradesPerWeek)) && Number(cfg.maxTradesPerWeek) > 0){
+    if (Number(S.tradesThisWeek || 0) >= Number(cfg.maxTradesPerWeek)){
+      log(`[GATE][WEEKLY_LIMIT] run=${S.runId || '-'} preset=${runPreset} symbol=${symbol} used=${S.tradesThisWeek} max=${cfg.maxTradesPerWeek}`);
+      return;
+    }
+  }
+
+  refreshHighWatermarkCash();
+  const ddFromHigh = getDrawdownFromHigh();
+  if (Number.isFinite(Number(cfg.maxDD)) && ddFromHigh >= Number(cfg.maxDD)){
+    S.locked = true;
+    S.lockType = 'DD';
+    S.lockReason = `DD ${(ddFromHigh * 100).toFixed(2)}% >= limite ${(Number(cfg.maxDD) * 100).toFixed(2)}%`;
+    log(`[GATE][DD_BREAKER] ${S.lockReason}`);
+    return;
+  }
+
+  refreshTurnoverDay();
+  if (Number.isFinite(Number(cfg.maxTurnoverPerDayPct)) && Number(cfg.maxTurnoverPerDayPct) > 0){
+    const turnoverCapUsd = Number(S.cash || 0) * (Number(cfg.maxTurnoverPerDayPct) / 100);
+    if (Number(S.dayTurnoverUsd || 0) >= turnoverCapUsd){
+      log(`[GATE][TURNOVER] run=${S.runId || '-'} preset=${runPreset} symbol=${symbol} turnover_usd=${Number(S.dayTurnoverUsd || 0).toFixed(2)} cap_usd=${turnoverCapUsd.toFixed(2)}`);
+      return;
+    }
+  }
+
   const nextAllowed = S.cooldownBySymbol.get(symbol);
   if (cfg.cooldownCandles > 0 && typeof nextAllowed === 'number' && currentKlineTs < nextAllowed){
     return;
   }
 
   if (dec.signal === 'HOLD' || !dec.atr || dec.score < S.SCORE_MIN) return;
+  if (cfg.trendOnly && dec.signal !== 'BUY') return;
+
+  const trendGate = evaluateTrendGate(dec, series, cfg);
+  if (!trendGate.ok){
+    log(`[GATE][TREND] run=${S.runId || '-'} preset=${runPreset} symbol=${symbol} reason=${trendGate.reason}`);
+    return;
+  }
+  const chopGate = evaluateChopGate(dec, series, cfg);
+  if (!chopGate.ok){
+    log(`[GATE][CHOP] run=${S.runId || '-'} preset=${runPreset} symbol=${symbol} reason=${chopGate.reason}`);
+    return;
+  }
 
   let mtf = null;
   if (dec.signal === 'BUY' && cfg.mtfConfirmOn){
@@ -856,10 +1138,17 @@ async function tickSymbol(symbol, cfg){
     return;
   }
 
+  const pullbackGate = evaluatePullbackGate(dec, series, cfg);
+  if (!pullbackGate.ok){
+    log(`[GATE][PULLBACK] run=${S.runId || '-'} preset=${runPreset} symbol=${symbol} reason=${pullbackGate.reason}`);
+    return;
+  }
+
   let riskMult = 1.0;
   if (dec.bullRegime && dec.ema9 != null && dec.ema21 != null && dec.ema9 < dec.ema21) riskMult = 0.5;
   if (dec.bearRegime && dec.ema9 != null && dec.ema21 != null && dec.ema9 > dec.ema21) riskMult = 0.5;
   riskMult *= getProfitProtectionFactor();
+  riskMult *= computeDynamicRiskMultiplier(cfg);
 
   const entry = dec.last;
   const stopDist = dec.atr * cfg.atrStop;
@@ -868,53 +1157,67 @@ async function tickSymbol(symbol, cfg){
   const target = dec.signal === 'BUY' ? (entry + targetDist) : (entry - targetDist);
   const rr = Math.abs(target - entry) / Math.max(1e-9, Math.abs(entry - stop));
 
-  if (rr < cfg.minRR){
+  const minGrossR = Number(cfg.minRR || 0);
+  if (rr < minGrossR){
     if (S.testMode || dec.score >= 8.5){
-      log(`[PROFILE][SKIP_RR] run=${S.runId || '-'} preset=${runPreset} symbol=${symbol} rr=${rr.toFixed(2)} min_rr=${cfg.minRR.toFixed(2)}`);
+      log(`[PROFILE][SKIP_RR] run=${S.runId || '-'} preset=${runPreset} symbol=${symbol} rr=${rr.toFixed(2)} min_rr=${minGrossR.toFixed(2)}`);
     }
     return;
   }
 
-    // ===== Fee-aware filter =====
-    // Evita operações cujo movimento esperado até o target não cobre custo total (taxas+execução+buffer).
-    const feePct = resolveTradeFeePct(cfg);
-    const roundTripFeePct = Math.max(0, Number(feePct || 0)) * 2; // em %
-    const execCostPctOneWay = (Math.max(0, cfg.execSpreadBps || 0) / 2 + Math.max(0, cfg.execSlippageBps || 0) + ((Math.max(0, cfg.execLatencyMs || 0)/1000) * Math.max(0, cfg.execLatencyBpsPerSec || 0))) / 100;
-    const execCostPctRoundTrip = execCostPctOneWay * 2;
-    const expectedMovePct = Math.abs(target - entry) / Math.max(1e-9, entry) * 100;
-    const minMovePct = roundTripFeePct + execCostPctRoundTrip + (Number(cfg.edgeMinPct || 0) || 0);
+  const feePct = resolveTradeFeePct(cfg);
+  const roundTripFeePct = Math.max(0, Number(feePct || 0)) * 2;
+  const execCostPctOneWay = (Math.max(0, cfg.execSpreadBps || 0) / 2 + Math.max(0, cfg.execSlippageBps || 0) + ((Math.max(0, cfg.execLatencyMs || 0) / 1000) * Math.max(0, cfg.execLatencyBpsPerSec || 0))) / 100;
+  const execCostPctRoundTrip = execCostPctOneWay * 2;
+  const expectedMovePct = Math.abs(target - entry) / Math.max(1e-9, entry) * 100;
+  const stopMovePct = Math.abs(entry - stop) / Math.max(1e-9, entry) * 100;
+  const minMovePct = roundTripFeePct + execCostPctRoundTrip + (Number(cfg.edgeMinPct || 0) || 0);
+  if (expectedMovePct < minMovePct){
+    if (S.testMode || dec.score >= 8.5){
+      log(`[PROFILE][SKIP_EDGE] run=${S.runId || '-'} preset=${runPreset} symbol=${symbol} move_pct=${expectedMovePct.toFixed(2)} min_pct=${minMovePct.toFixed(2)} fees_pct=${roundTripFeePct.toFixed(2)} exec_pct_rt=${execCostPctRoundTrip.toFixed(2)} edge_pct=${Number(cfg.edgeMinPct || 0).toFixed(2)}`);
+    }
+    return;
+  }
 
-    if (expectedMovePct < minMovePct){
-      // log leve (não polui demais): só em modo Teste ou se score alto.
-      if (S.testMode || dec.score >= 8.5){
-        log(`[PROFILE][SKIP_EDGE] run=${S.runId || '-'} preset=${runPreset} symbol=${symbol} move_pct=${expectedMovePct.toFixed(2)} min_pct=${minMovePct.toFixed(2)} fees_pct=${roundTripFeePct.toFixed(2)} exec_pct_rt=${execCostPctRoundTrip.toFixed(2)} edge_pct=${Number(cfg.edgeMinPct||0).toFixed(2)}`);
-      }
+  const minNetR = Number(cfg.minNetRTarget || 0);
+  if (minNetR > 0){
+    const netMovePct = expectedMovePct - roundTripFeePct - execCostPctRoundTrip;
+    const netR = netMovePct / Math.max(1e-9, stopMovePct);
+    if (netR < minNetR){
+      log(`[GATE][NET_R] run=${S.runId || '-'} preset=${runPreset} symbol=${symbol} net_r=${netR.toFixed(2)} min_net_r=${minNetR.toFixed(2)}`);
       return;
     }
+  }
 
-  const riskUsdEst = S.cash * (cfg.riskPct/100) * riskMult;
+  const edgeGate = evaluateEdgeGates(cfg);
+  if (!edgeGate.ok){
+    log(`[GATE][EDGE] run=${S.runId || '-'} preset=${runPreset} symbol=${symbol} reason=${edgeGate.reason}`);
+    return;
+  }
+
+  const riskFrac = cfg.riskPctIsFraction ? Number(cfg.riskPct || 0) : (Number(cfg.riskPct || 0) / 100);
+  const riskUsdEst = S.cash * riskFrac * riskMult;
   const qtyEst = riskUsdEst / Math.max(1e-9, Math.abs(entry - stop));
+  const slipGate = evaluateSlippageKillSwitch(entry, qtyEst, cfg);
+  if (!slipGate.ok){
+    log(`[GATE][KILL_SWITCH] run=${S.runId || '-'} preset=${runPreset} symbol=${symbol} reason=${slipGate.reason}`);
+    return;
+  }
+
   const winUsd = Math.abs(target - entry) * qtyEst;
   const lossUsd = Math.abs(entry - stop) * qtyEst;
   const pWin = (S.wins + S.losses) >= 30 ? (S.wins / Math.max(1, S.wins + S.losses)) : 0.52;
   const avgWin = S.wins > 0 ? (S.grossWinUsd / Math.max(1, S.wins)) : winUsd;
   const avgLoss = S.losses > 0 ? (S.grossLossUsd / Math.max(1, S.losses)) : lossUsd;
   const feeRoundTripUsd = Math.abs(entry * qtyEst) * ((roundTripFeePct + execCostPctRoundTrip) / 100);
-  const taxEstUsd = (cfg.taxOn ? Math.max(0, (pWin * avgWin - (1 - pWin) * avgLoss)) * (cfg.taxPct/100) : 0);
-  const evNetUsd = (pWin * avgWin) - ((1-pWin) * avgLoss) - feeRoundTripUsd - taxEstUsd;
-
+  const taxEstUsd = (cfg.taxOn ? Math.max(0, (pWin * avgWin - (1 - pWin) * avgLoss)) * (cfg.taxPct / 100) : 0);
+  const evNetUsd = (pWin * avgWin) - ((1 - pWin) * avgLoss) - feeRoundTripUsd - taxEstUsd;
   if (evNetUsd <= 0){
     if (S.testMode || dec.score >= 8.5){
       log(`[PROFILE][SKIP_EV] run=${S.runId || '-'} preset=${runPreset} symbol=${symbol} ev_net_usd=${evNetUsd.toFixed(2)} pwin=${pWin.toFixed(2)} avg_win=${avgWin.toFixed(2)} avg_loss=${avgLoss.toFixed(2)} fees_exec_usd=${feeRoundTripUsd.toFixed(2)} tax_est_usd=${taxEstUsd.toFixed(2)}`);
     }
     return;
   }
-
-  if (dec.score >= 8.5){
-    log(`[PROFILE][ENTRY_OK] run=${S.runId || '-'} preset=${runPreset} symbol=${symbol} score=${dec.score.toFixed(2)} rr=${rr.toFixed(2)} ev_net_usd=${evNetUsd.toFixed(2)} risk_mult=${riskMult.toFixed(2)}`);
-  }
-
-
 
   const idea = {
     signal: dec.signal,
@@ -929,9 +1232,7 @@ async function tickSymbol(symbol, cfg){
       ...dec.reasons,
       `RISKx=${riskMult.toFixed(2)}`,
       `CORRMAX=${corrGate.maxCorr == null ? 'NA' : corrGate.maxCorr.toFixed(2)}`,
-      (dec.signal === 'BUY' && mtf)
-        ? `MTF(${cfg.mtfConfirmInterval})=${mtf.bullRegime ? 'BULL' : 'NA'}`
-        : 'MTF=NA'
+      (dec.signal === 'BUY' && mtf) ? `MTF(${cfg.mtfConfirmInterval})=${mtf.bullRegime ? 'BULL' : 'NA'}` : 'MTF=NA'
     ],
     riskMult,
     klineCloseTs: currentKlineTs,
@@ -946,10 +1247,14 @@ async function tickSymbol(symbol, cfg){
   if (cfg.mode === 'AUTO'){
     openTradeFromIdea(idea, cfg, log, riskMult);
     markTradeGuard(key);
+    S.tradesThisWeek = Number(S.tradesThisWeek || 0) + 1;
+    S.dayTurnoverUsd = Number(S.dayTurnoverUsd || 0) + Math.abs(entry * qtyEst);
   } else {
     if (dec.score >= S.SCORE_AUTO_ON_ASK){
       openTradeFromIdea(idea, cfg, log, riskMult);
       markTradeGuard(key);
+      S.tradesThisWeek = Number(S.tradesThisWeek || 0) + 1;
+      S.dayTurnoverUsd = Number(S.dayTurnoverUsd || 0) + Math.abs(entry * qtyEst);
     } else {
       addPending(idea);
       markTradeGuard(key);
@@ -958,9 +1263,10 @@ async function tickSymbol(symbol, cfg){
 
   if (cfg.cooldownCandles > 0){
     const barMs = intervalToMs(cfg.interval);
-    S.cooldownBySymbol.set(symbol, currentKlineTs + cfg.cooldownCandles*barMs);
+    S.cooldownBySymbol.set(symbol, currentKlineTs + cfg.cooldownCandles * barMs);
   }
 }
+
 
 async function tick(){
   if (S.ticking){
@@ -983,6 +1289,9 @@ async function tick(){
     log(`Novo dia: anchor (cash) = ${fmtUSD(S.dayAnchorCash)}`);
   }
   S.dayPeakCash = Math.max(Number(S.dayPeakCash||S.cash), Number(S.cash||0));
+  refreshWeeklyCounter();
+  refreshTurnoverDay();
+  refreshHighWatermarkCash();
 
   await refreshBestOfDayIfNeeded(cfg);
 
@@ -1006,8 +1315,17 @@ async function tick(){
   if (!S.locked && dd >= cfg.maxDailyDD){
     S.locked = true;
     S.lockType = 'DD';
-    S.lockReason = `Daily DD ${dd.toFixed(2)}% ≥ limite ${cfg.maxDailyDD}%`;
-    log(`🔒 BLOQUEIO DD: ${S.lockReason}`);
+    S.lockReason = `Daily DD ${dd.toFixed(2)}% >= limite ${cfg.maxDailyDD}%`;
+    log(`[GATE][DAILY_DD] ${S.lockReason}`);
+  }
+  if (!S.locked && Number.isFinite(Number(cfg.maxDD))){
+    const ddGlobal = getDrawdownFromHigh();
+    if (ddGlobal >= Number(cfg.maxDD)){
+      S.locked = true;
+      S.lockType = 'DD';
+      S.lockReason = `DD ${(ddGlobal * 100).toFixed(2)}% >= limite ${(Number(cfg.maxDD) * 100).toFixed(2)}%`;
+      log(`[GATE][DD_BREAKER] ${S.lockReason}`);
+    }
   }
 
   // Atualiza labels de tick apenas 1x por ciclo (evita reflows por símbolo)
@@ -1055,6 +1373,9 @@ function repaint(){
 // --------- controls ----------
 function start(){
   if (S.running) return;
+  refreshWeeklyCounter();
+  refreshTurnoverDay();
+  refreshHighWatermarkCash();
 
   if (S.pendingInitialCash != null && S.open.length === 0 && S.pending.length === 0){
     const pendingCash = Number(S.pendingInitialCash);
@@ -1063,6 +1384,7 @@ function start(){
       S.cash = pendingCash;
       S.dayAnchorCash = pendingCash;
       S.dayPeakCash = pendingCash;
+      S.highWatermarkCash = pendingCash;
       S.pendingInitialCash = null;
       log(`Saldo inicial pendente aplicado no start: ${fmtUSD(pendingCash)}.`);
     }
@@ -1080,7 +1402,7 @@ function start(){
   setFocus(true, 'Modo Foco: ON (auto ao ligar o robô)');
 
   const startSymbols = resolveRuntimeSymbols(S.runtimeCfg);
-  log(`[AUDIT][RUN_START] run=${S.runId} mode=${S.runtimeCfg.mode} preset=${S.runningProfile || '-'} interval=${S.runtimeCfg.interval} symbols=${startSymbols.length} risk_pct=${S.runtimeCfg.riskPct.toFixed(2)} dd_limit_pct=${S.runtimeCfg.maxDailyDD.toFixed(2)} loop_sec=${S.runtimeCfg.loopSec}`);
+  log(`[AUDIT][RUN_START] run=${S.runId} mode=${S.runtimeCfg.mode} preset=${S.runningProfile || '-'} strategy=${S.runtimeCfg.selectedPresetId || 'NONE'} interval=${S.runtimeCfg.interval} symbols=${startSymbols.length} risk_pct=${normalizeRiskPctForDisplay(S.runtimeCfg).toFixed(2)} dd_limit_pct=${S.runtimeCfg.maxDailyDD.toFixed(2)} loop_sec=${S.runtimeCfg.loopSec}`);
   tick();
   S.timer = setInterval(tick, S.runtimeCfg.loopSec*1000);
   scheduleRepaint();
@@ -1124,6 +1446,20 @@ function resetAll(){
   S.wins = 0;
   S.losses = 0;
   S.lossStreak = 0;
+  S.netLossStreak = 0;
+  S.highWatermarkCash = startCash;
+  S.tradesWeekKey = null;
+  S.tradesThisWeek = 0;
+  S.turnoverDayKey = null;
+  S.dayTurnoverUsd = 0;
+  S.closedTradesNet = [];
+  S.riskCutActive = false;
+  S.riskCutRemainingTrades = 0;
+  S.riskCutAnchorHighWatermark = null;
+  S.killSwitchUntilTs = 0;
+  S.killSwitchReason = '';
+  S.lastRollingExpectancyUsd = null;
+  S.lastRollingWinRate = null;
 
   S.locked = false;
   S.lockReason = '';
@@ -1160,6 +1496,12 @@ function unlockAllSafety(){
   S.locked = false;
   S.lockType = null;
   S.lossStreak = 0;
+  S.netLossStreak = 0;
+  S.riskCutActive = false;
+  S.riskCutRemainingTrades = 0;
+  S.riskCutAnchorHighWatermark = null;
+  S.killSwitchUntilTs = 0;
+  S.killSwitchReason = '';
   S.lockReason = '';
   S.dayAnchorCash = S.cash;
   log(`Desbloqueio manual (${prevType || 'SEM_BLOQUEIO'}): loss streak zerado e novo anchor (cash) = ${fmtUSD(S.dayAnchorCash)}`);
@@ -1190,6 +1532,12 @@ if (el.btnFocus) el.btnFocus.addEventListener('click', toggleFocus);
 const cfgInitialCash = document.getElementById('cfgInitialCash');
 if (cfgInitialCash){
   cfgInitialCash.addEventListener('change', () => applyInitialCashInput(false));
+}
+const cfgStrategyPreset = document.getElementById('cfgStrategyPreset');
+if (cfgStrategyPreset){
+  cfgStrategyPreset.addEventListener('change', (ev) => {
+    applySelectedPresetId(String(ev?.target?.value || 'NONE'));
+  });
 }
 // duplicated core controls inside Focus Widgets
 // Focus Widgets: NÃO use listeners diretos aqui.
@@ -1267,9 +1615,13 @@ document.addEventListener('click', (ev) => {
 
 // init
 fillSymbols();
+S.selectedPresetId = loadSelectedPresetId();
+S.selectedPresetName = S.selectedPresetId === 'NONE' ? 'Sem preset extra' : (PRESETS[S.selectedPresetId]?.name || 'Sem preset extra');
+initStrategyPresetSelector();
 setInput('cfgInitialCash', Number(S.initialCash || 100));
 applyParamTooltips();
 applyIntervalPreset(S.intervalPreset || '5m', true);
+applySelectedPresetId(S.selectedPresetId, true);
 log('App pronto. Clique em "Ligar Robô" ou "Rodar 1x".');
 // ensure header toggle reflects current state on load
 setFocus(S.focus, 'init: sync focus button');
@@ -1279,6 +1631,8 @@ repaint();
 window.guardian = {
   tick,
   applyPreset: (k) => applyIntervalPreset(k),
+  applyStrategyPreset: (k) => applySelectedPresetId(k),
+  listStrategyPresets: () => Object.keys(PRESETS),
   getCfg,
   setFocus,
   refreshBest: async () => { await refreshBestOfDayIfNeeded(getCfg(), true); repaint(); },
@@ -1296,3 +1650,4 @@ window.guardian = {
     bestTop: S.bestOfDay.slice(0,10)
   })),
 };
+

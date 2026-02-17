@@ -324,9 +324,10 @@ export function updateUI(el, getCfg, renderFns){
 
   const selectedPreset = String(S.intervalPreset || '-');
   const runningPreset = String(S.runningProfile || selectedPreset);
+  const strategyPreset = String(cfg.selectedPresetId || S.selectedPresetId || 'NONE');
   el.profileLabel.textContent = S.running
-    ? `Preset selecionado: ${selectedPreset} · Rodando: ${runningPreset}`
-    : `Preset selecionado: ${selectedPreset}`;
+    ? `Preset selecionado: ${selectedPreset} · Strategy: ${strategyPreset} · Rodando: ${runningPreset}`
+    : `Preset selecionado: ${selectedPreset} · Strategy: ${strategyPreset}`;
 
   el.btnTestMode.textContent = `Modo Teste: ${S.testMode ? 'ON' : 'OFF'}`;
   el.btnFocus.textContent = `Modo Foco: ${S.focus ? 'ON' : 'OFF'}`;

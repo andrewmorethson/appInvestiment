@@ -74,6 +74,13 @@ export function canTradeNew(cfg){
   return { ok:true, code:'OK' };
 }
 
+function resolveRiskFraction(cfg){
+  const v = Number(cfg?.riskPct || 0);
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  if (cfg?.riskPctIsFraction) return v;
+  return v / 100;
+}
+
 function calcPositionQty(entry, stop, riskUsd){
   const dist = Math.max(1e-9, Math.abs(entry-stop));
   return riskUsd / dist;
@@ -113,7 +120,8 @@ export function bookRealized(pnl, log){
 export function openTradeFromIdea(idea, cfg, log, riskMult = 1.0){
   const entryExec = applyExecutionModel(idea.signal, idea.entry, cfg);
   const id = uid();
-  const riskUsd = S.cash * (cfg.riskPct/100) * riskMult; // sobre saldo
+  const riskFrac = resolveRiskFraction(cfg);
+  const riskUsd = S.cash * riskFrac * riskMult; // sobre saldo
   const qty = calcPositionQty(entryExec, idea.stop, riskUsd);
 
   // Taxa de entrada (Binance spot): cobrada na execução (market/taker). Subtrai do saldo imediatamente.
@@ -163,6 +171,9 @@ export function openTradeFromIdea(idea, cfg, log, riskMult = 1.0){
   };
 
   S.open.push(trade);
+  if (S.riskCutActive && S.riskCutRemainingTrades > 0){
+    S.riskCutRemainingTrades = Math.max(0, Number(S.riskCutRemainingTrades || 0) - 1);
+  }
   log?.(`[AUDIT][OPEN] run=${S.runId || '-'} trade=${trade.id} side=${trade.side} symbol=${trade.symbol} interval=${trade.interval} score=${idea.score.toFixed(2)} riskx=${riskMult.toFixed(2)} fee_entry_usd=${feeEntry.toFixed(2)} fee_pct=${trade.feePctUsed.toFixed(3)} tax_on=${trade.taxOnUsed ? 'ON' : 'OFF'} | entry_mark=${idea.fmtPx(idea.entry)} entry_exec=${idea.fmtPx(entryExec)} stop=${idea.fmtPx(trade.stop)} target=${idea.fmtPx(trade.target)} qty=${trade.qty.toFixed(6)}`);
 }
 
@@ -186,14 +197,78 @@ export function closeTrade(trade, exitPrice, reason, log, cfg){
   trade.feeEntryUsdRemaining = 0;
   const taxable = pnl - feeEntryPart - feeExit;
   const taxUsd = applyTaxOnProfit(taxable, S, { taxOn: trade.taxOnUsed, taxPct: trade.taxPctUsed, taxApplyCash: trade.taxApplyCashUsed }, log);
+  const netUsd = pnl - feeEntryPart - feeExit - Number(taxUsd || 0);
   const riskBase = Math.max(1e-9, Number(trade.riskUsdInitial || trade.riskUsd || 0));
   const realizedR = pnl / riskBase;
+  const realizedNetR = netUsd / riskBase;
   const holdMin = Math.max(0, (Date.now() - Number(trade.openedAt || Date.now())) / 60_000);
+
+  S.closedTradesNet.push({
+    ts: Date.now(),
+    symbol: trade.symbol,
+    netUsd,
+    netR: realizedNetR,
+    win: netUsd > 0 ? 1 : 0
+  });
+  if (S.closedTradesNet.length > 1200){
+    S.closedTradesNet.splice(0, S.closedTradesNet.length - 1200);
+  }
+
+  if (netUsd < -1e-9) S.netLossStreak = Number(S.netLossStreak || 0) + 1;
+  else if (netUsd > 1e-9) S.netLossStreak = 0;
+
+  const currentHighWatermark = Math.max(Number(S.highWatermarkCash || 0), Number(S.cash || 0));
+  S.highWatermarkCash = currentHighWatermark;
+
+  const cutOn = !!cfg?.lossStreakRiskCutOn;
+  const cutAfter = Math.max(1, Number(cfg?.lossStreakCutAfter || 3));
+  const cutTrades = Math.max(1, Number(cfg?.lossStreakCutTrades || 5));
+  if (cutOn && Number(S.netLossStreak || 0) >= cutAfter && !S.riskCutActive){
+    S.riskCutActive = true;
+    S.riskCutRemainingTrades = cutTrades;
+    S.riskCutAnchorHighWatermark = currentHighWatermark;
+    log?.(`[RISK_CUT] ativado apos ${cutAfter} perdas consecutivas. fator=${Number(cfg?.lossStreakCutFactor || 0.5).toFixed(2)} trades=${cutTrades} hwm=${currentHighWatermark.toFixed(2)}`);
+  }
+
+  if (S.riskCutActive){
+    const anchor = Number(S.riskCutAnchorHighWatermark || 0);
+    const recoveredHwm = anchor > 0 && Number(S.cash || 0) >= anchor;
+    const exhausted = Number(S.riskCutRemainingTrades || 0) <= 0;
+    if (recoveredHwm || exhausted){
+      S.riskCutActive = false;
+      S.riskCutRemainingTrades = 0;
+      S.riskCutAnchorHighWatermark = null;
+      S.netLossStreak = 0;
+      log?.(`[RISK_CUT] restaurado (${recoveredHwm ? 'novo high-watermark' : 'janela encerrada'}).`);
+    }
+  }
 
   S.open = S.open.filter(t => t.id !== trade.id);
   log?.(`[AUDIT][CLOSE] run=${S.runId || '-'} trade=${trade.id} side=${trade.side} symbol=${trade.symbol} interval=${trade.interval} reason=${reason} pnl_usd=${pnl.toFixed(2)} taxable_usd=${taxable.toFixed(2)} fee_exit_usd=${feeExit.toFixed(2)} fee_trade_total_usd=${(Number(trade.feeUsdTotal)||0).toFixed(2)} tax_usd=${Number(taxUsd||0).toFixed(2)} | exit_mark=${Number(exitPrice||0).toFixed(6)} exit_exec=${px.toFixed(6)}`);
-  log?.(`[PROFILE][EXIT] run=${S.runId || '-'} profile=${S.runningProfile || '-'} trade=${trade.id} symbol=${trade.symbol} side=${trade.side} reason=${reason} r_realized=${realizedR.toFixed(2)} hold_min=${holdMin.toFixed(1)} mfe_r=${Number(trade.maxFavR||0).toFixed(2)} mae_r=${Number(trade.maxAdvR||0).toFixed(2)} win=${pnl >= 0 ? 1 : 0}`);
+  log?.(`[PROFILE][EXIT] run=${S.runId || '-'} profile=${S.runningProfile || '-'} trade=${trade.id} symbol=${trade.symbol} side=${trade.side} reason=${reason} r_realized=${realizedR.toFixed(2)} r_net=${realizedNetR.toFixed(2)} hold_min=${holdMin.toFixed(1)} mfe_r=${Number(trade.maxFavR||0).toFixed(2)} mae_r=${Number(trade.maxAdvR||0).toFixed(2)} win=${netUsd >= 0 ? 1 : 0}`);
   logProfileRollup(log);
+}
+
+export function computeRollingEdge(windowTrades){
+  const n = Math.max(1, Number(windowTrades || 1));
+  const hist = Array.isArray(S.closedTradesNet) ? S.closedTradesNet : [];
+  if (!hist.length){
+    return { count: 0, expectancyUsd: null, winRate: null };
+  }
+  const slice = hist.slice(-n);
+  const count = slice.length;
+  let sum = 0;
+  let wins = 0;
+  for (const x of slice){
+    const net = Number(x?.netUsd || 0);
+    if (net > 0) wins += 1;
+    sum += net;
+  }
+  return {
+    count,
+    expectancyUsd: sum / Math.max(1, count),
+    winRate: wins / Math.max(1, count)
+  };
 }
 
 export function closePartial(trade, exitPrice, pct, reason, log, cfg){
