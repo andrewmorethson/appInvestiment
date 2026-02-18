@@ -22,9 +22,10 @@ function pickBest(scoreDecision, momentumDecision, probDecision){
 }
 
 export function compareModels(symbol, data, localState){
+  const cfg = localState?.cfg || {};
   const scoreDecision = buildDecision(data, { atrPeriod: 14 });
-  const momentumDecision = buildMomentumDecision(symbol, data, localState);
-  const probDecision = buildProbabilityDecision(symbol, data, localState?.trades || []);
+  const probDecision = buildProbabilityDecision(symbol, data, cfg);
+  const momentumDecision = buildMomentumDecision(symbol, data, localState, probDecision);
   const best = pickBest(scoreDecision, momentumDecision, probDecision);
   return {
     symbol,
@@ -34,4 +35,3 @@ export function compareModels(symbol, data, localState){
     best
   };
 }
-

@@ -1,4 +1,5 @@
 import { EdgeEngine } from './edgeEngine.js';
+import { DEFAULT_EXPERIMENTAL_CFG } from './experimentalConfig.js';
 
 export const experimentalState = {
   trades: [],
@@ -6,6 +7,7 @@ export const experimentalState = {
   highWatermark: 100,
   drawdown: 0,
   edgeEngine: new EdgeEngine(50),
+  cfg: { ...DEFAULT_EXPERIMENTAL_CFG },
   logs: [],
   scannerRows: [],
   comparatorRows: []
@@ -18,6 +20,7 @@ export function resetExperimentalState(initialEquity = 100){
   experimentalState.highWatermark = eq;
   experimentalState.drawdown = 0;
   experimentalState.edgeEngine = new EdgeEngine(50);
+  experimentalState.cfg = { ...DEFAULT_EXPERIMENTAL_CFG };
   experimentalState.logs = [];
   experimentalState.scannerRows = [];
   experimentalState.comparatorRows = [];

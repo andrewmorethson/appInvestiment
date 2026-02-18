@@ -1,4 +1,5 @@
 import { SMA } from '../js/indicators.js';
+import { DEFAULT_EXPERIMENTAL_CFG, mergeExperimentalCfg } from './experimentalConfig.js';
 
 function pctChange(a, b){
   const x = Number(a || 0);
@@ -53,11 +54,12 @@ function meanLast(arr, n, endIdx){
 }
 
 export function detectRegime(data, cfg = {}){
+  const k = mergeExperimentalCfg(DEFAULT_EXPERIMENTAL_CFG, cfg);
   const closes = data?.c || [];
   const highs = data?.h || [];
   const lows = data?.l || [];
   const n = closes.length - 1;
-  const slopeLookback = Math.max(10, Number(cfg.slopeLookback || 80));
+  const slopeLookback = Math.max(10, Number(k.slopeLookback || 80));
   if (n < Math.max(200 + slopeLookback, 220)){
     return { regime: 'CHOP', slopeNorm: 0, ma200: null, atr: null };
   }
@@ -72,39 +74,51 @@ export function detectRegime(data, cfg = {}){
   const price = Number(closes[n] || 0);
 
   let regime = 'NON_BULL';
-  if (Math.abs(slopeNorm) < 0.15) regime = 'CHOP';
-  else if (price > mNow && slopeNorm > 0.15) regime = 'BULL';
+  if (Math.abs(slopeNorm) < Number(k.chopSlopeNorm || 0.05)) regime = 'CHOP';
+  else if (price > mNow && slopeNorm > Number(k.bullSlopeNorm || 0.10)) regime = 'BULL';
 
   return { regime, slopeNorm, ma200: mNow, atr: atrNow, slopeLookback };
 }
 
-export function buildMomentumDecision(symbol, data, localState){
+export function breakoutSignal(data, cfg = {}){
+  const k = mergeExperimentalCfg(DEFAULT_EXPERIMENTAL_CFG, cfg);
   const closes = data?.c || [];
   const highs = data?.h || [];
   const lows = data?.l || [];
   const volumes = data?.v || [];
   const n = closes.length - 1;
-  if (n < 320){
-    return { model: 'MOMENTUM', symbol, signal: 'HOLD', reason: 'INSUFFICIENT_DATA', score: 0 };
+  if (n < 60){
+    return { breakout: false, atrExp: false, volExp: false, expCount: 0, atrNow: null };
   }
-
-  const regimeInfo = detectRegime(data, { slopeLookback: 80 });
-  const regime = regimeInfo.regime;
-  const slopeNorm = Number(regimeInfo.slopeNorm || 0);
-
   const atrSeries = buildAtrSeries(highs, lows, closes, 14);
   const atrNow = Number(atrSeries[n] || 0);
   const atrMean20 = meanLast(atrSeries, 20, n);
   const atrExp = atrNow > atrMean20;
-
   const volNow = Number(volumes[n] || 0);
   const volMean20 = meanLast(volumes, 20, n);
   const volExp = volNow > volMean20;
-
-  const breakoutHigh = Math.max(...highs.slice(Math.max(0, n - 11), n + 1));
+  const lookback = Math.max(5, Number(k.breakoutLookback || 12));
+  const start = Math.max(0, n - lookback);
+  const priorWindow = highs.slice(start, n);
+  const breakoutHigh = priorWindow.length ? Math.max(...priorWindow.map(Number)) : Number(highs[n] || 0);
   const breakout = Number(highs[n] || 0) >= Number(breakoutHigh || 0);
   const expansionsCount = Number(atrExp ? 1 : 0) + Number(volExp ? 1 : 0);
   const breakoutPass = breakout && expansionsCount >= 1;
+  return { breakout: breakoutPass, atrExp, volExp, expCount: expansionsCount, atrNow };
+}
+
+export function buildMomentumDecision(symbol, data, localState, probDecision = null){
+  const k = mergeExperimentalCfg(DEFAULT_EXPERIMENTAL_CFG, localState?.cfg || {});
+  const closes = data?.c || [];
+  const n = closes.length - 1;
+  if (n < 320){
+    return { model: 'MOMENTUM', symbol, signal: 'HOLD', reason: 'INSUFFICIENT_DATA', score: 0 };
+  }
+
+  const regimeInfo = detectRegime(data, k);
+  const regime = regimeInfo.regime;
+  const slopeNorm = Number(regimeInfo.slopeNorm || 0);
+  const bo = breakoutSignal(data, k);
 
   const momentumScore = calculateMomentumScore(closes);
 
@@ -115,23 +129,27 @@ export function buildMomentumDecision(symbol, data, localState){
   const rollingNetExpectancy = Number(edgeEngine?.rollingExpectancy?.() ?? 0);
   const edgeOk = (tradesCount < edgeMinTrades) || (rollingNetExpectancy > 0);
 
+  const prob2R = probDecision?.prob2R ?? probDecision?.probability ?? null;
+  const probOk = (prob2R != null) && Number(prob2R) >= 0.55;
+
   let score = 0;
   if (regime === 'BULL') score += 35;
-  if (breakout) score += 20;
-  if (atrExp) score += 10;
-  if (volExp) score += 10;
+  if (bo.breakout) score += 20;
+  if (bo.atrExp) score += 10;
+  if (bo.volExp) score += 10;
   if (momentumScore != null){
     score += Math.max(0, Math.min(25, momentumScore * 350));
   }
   score += edgeOk ? 5 : 0;
+  if (regime === 'NON_BULL' && probOk) score += 5;
 
   let blockReason = 'NONE';
   if (regime === 'CHOP') blockReason = 'REGIME_CHOP';
-  else if (regime !== 'BULL') blockReason = 'REGIME_NON_BULL';
-  else if (!breakoutPass) blockReason = 'BREAKOUT_2OF3_FAIL';
+  else if (!bo.breakout) blockReason = 'BREAKOUT_2OF3_FAIL';
   else if (!edgeOk) blockReason = 'EDGE_NEGATIVE';
   else if (momentumScore == null) blockReason = 'MOMENTUM_NA';
-  else if (momentumScore <= 0) blockReason = 'MOMENTUM_WEAK';
+  else if (momentumScore < Number(k.minMomentum || 0.001)) blockReason = 'MOMENTUM_WEAK';
+  else if (regime === 'NON_BULL' && !probOk) blockReason = 'NON_BULL_REQUIRES_PROB';
 
   const signal = blockReason === 'NONE' ? 'BUY' : 'HOLD';
 
@@ -144,16 +162,19 @@ export function buildMomentumDecision(symbol, data, localState){
     regime,
     regimeBull: regime === 'BULL',
     slopeNorm,
-    breakoutFlag: breakoutPass,
-    breakout,
-    atrExp,
-    volExp,
+    breakoutFlag: bo.breakout,
+    breakout: bo.breakout,
+    atrExp: bo.atrExp,
+    volExp: bo.volExp,
+    expCount: bo.expCount,
     momentumScore,
+    prob2R,
+    probOk,
     rollingNetExpectancy,
     edgeTradesCount: tradesCount,
     edgeMinTrades,
     edgeOk,
-    atr: atrNow,
+    atr: bo.atrNow,
     reason: signal === 'BUY' ? 'MOMENTUM_SETUP' : blockReason
   };
 }

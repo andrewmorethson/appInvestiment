@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
@@ -87,7 +87,7 @@
           </select>
         </label>
         <label>Limite candles
-          <input id="limitInput" type="number" min="260" max="1200" value="800" />
+          <input id="limitInput" type="number" min="260" max="1500" value="1200" />
         </label>
         <button id="btnScan">Executar Scanner</button>
       </div>
@@ -144,7 +144,7 @@
             </select>
           </label>
           <label>Limite candles
-          <input id="btLimit" type="number" min="260" max="1200" value="800" />
+          <input id="btLimit" type="number" min="260" max="1500" value="1200" />
           </label>
           <button id="btnBacktest">Rodar Backtest</button>
         </div>
@@ -161,6 +161,46 @@
         </div>
       </div>
 
+      <div class="card">
+        <h2>Grid Search</h2>
+        <div class="row">
+          <label>Symbol
+            <input id="gsSymbol" value="BTCUSDT" />
+          </label>
+          <label>Modelo
+            <select id="gsModel">
+              <option value="momentum" selected>Momentum Model</option>
+              <option value="prob">Prob Model</option>
+              <option value="score">Score Model</option>
+            </select>
+          </label>
+          <label>Intervalo
+            <select id="gsInterval">
+              <option value="5m">5m</option>
+              <option value="15m" selected>15m</option>
+              <option value="30m">30m</option>
+              <option value="1h">1h</option>
+            </select>
+          </label>
+          <label>Limite candles
+            <input id="gsLimit" type="number" min="260" max="1500" value="1200" />
+          </label>
+          <button id="btnRunGrid">Run Grid</button>
+          <button id="btnApplyBest" class="secondary">Apply Best Params</button>
+        </div>
+        <div class="small" id="gridSummary" style="margin-top:8px;color:#96a9c1">Aguardando execuÃ§Ã£o...</div>
+        <div style="margin-top:8px;overflow:auto">
+          <table id="gridTable">
+            <thead>
+              <tr>
+                <th>#</th><th>stopAtr</th><th>rTarget</th><th>brkLb</th><th>chop</th><th>bull</th><th>Trades</th><th>Net</th><th>Exp</th><th>MaxDD</th><th>Status</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="card full">
         <h2>Logs Institucionais</h2>
         <div class="log" id="logsPanel"></div>
@@ -174,11 +214,16 @@
     import { buildMomentumDecision } from './momentumModel.js';
     import { compareModels } from './modelComparator.js';
     import { runBacktest, drawEquityCurve } from './visualBacktest.js';
+    import { runGridSearch, defaultGrid } from './gridSearch.js';
+    import { EdgeEngine } from './edgeEngine.js';
+    import { DEFAULT_EXPERIMENTAL_CFG, mergeExperimentalCfg } from './experimentalConfig.js';
 
     const $ = (id) => document.getElementById(id);
     const fmtUsd = (n) => (Number(n) || 0).toLocaleString('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2});
     const fmtPct = (n) => `${(Number(n) * 100).toFixed(2)}%`;
     const logsPanel = $('logsPanel');
+    let lastGridBest = null;
+    experimentalState.cfg = mergeExperimentalCfg(DEFAULT_EXPERIMENTAL_CFG, experimentalState.cfg || {});
 
     function logInstitutional(payload){
       const fmtNA = (v, digits = 4) => (v == null || !Number.isFinite(Number(v))) ? 'N/A' : Number(v).toFixed(digits);
@@ -249,8 +294,8 @@
     async function runScanner(){
       const symbols = $('symbolsInput').value.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
       const interval = $('intervalInput').value;
-      const limit = Math.max(260, Number($('limitInput').value || 800));
-      experimentalState.cfg = { edgeMinTrades: 30 };
+      const limit = Math.max(260, Number($('limitInput').value || 1200));
+      experimentalState.cfg = mergeExperimentalCfg(DEFAULT_EXPERIMENTAL_CFG, experimentalState.cfg || {});
 
       const scannerRows = [];
       const comparatorRows = [];
@@ -258,7 +303,7 @@
         try{
           const series = await loadSeries(symbol, interval, limit);
           const cmp = compareModels(symbol, series, experimentalState);
-          const mom = buildMomentumDecision(symbol, series, experimentalState);
+          const mom = cmp.momentumDecision;
           const prob2R = cmp.probDecision?.prob2R ?? cmp.probDecision?.probability ?? null;
           const probOcc = Number(cmp.probDecision?.occ || cmp.probDecision?.sampleSize || 0);
           const probSucc = Number(cmp.probDecision?.succ || cmp.probDecision?.wins2R || 0);
@@ -316,12 +361,12 @@
       const symbol = $('btSymbol').value.trim().toUpperCase();
       const interval = $('btInterval').value;
       const modelType = $('btModel').value;
-      const limit = Math.max(260, Number($('btLimit').value || 800));
+      const limit = Math.max(260, Number($('btLimit').value || 1200));
 
       const series = await loadSeries(symbol, interval, limit);
       const result = runBacktest(symbol, modelType, series, {
         edgeEngine: experimentalState.edgeEngine,
-        edgeMinTrades: 30
+        cfg: mergeExperimentalCfg(DEFAULT_EXPERIMENTAL_CFG, experimentalState.cfg || {})
       });
       if (result.error){
         logInstitutional({
@@ -366,10 +411,83 @@
       });
     }
 
+    function renderGridResults(res){
+      const tbody = $('gridTable').querySelector('tbody');
+      const rows = Array.isArray(res?.top10) ? res.top10 : [];
+      tbody.innerHTML = rows.map((r, idx) => `
+        <tr>
+          <td>${idx + 1}</td>
+          <td>${Number(r.params.stopAtrMult).toFixed(2)}</td>
+          <td>${Number(r.params.rTarget).toFixed(2)}</td>
+          <td>${Number(r.params.breakoutLookback)}</td>
+          <td>${Number(r.params.chopSlopeNorm).toFixed(2)}</td>
+          <td>${Number(r.params.bullSlopeNorm).toFixed(2)}</td>
+          <td>${Number(r.trades || 0)}</td>
+          <td>${fmtUsd(r.netProfit || 0)}</td>
+          <td>${fmtUsd(r.expectancy || 0)}</td>
+          <td>${fmtPct(r.maxDD || 0)}</td>
+          <td>${r.rejected ? 'REJECTED' : 'OK'}</td>
+        </tr>
+      `).join('');
+      $('gridSummary').textContent = `Combos: ${res?.totalCombos || 0} · Válidos: ${res?.validCount || 0} · Best: ${res?.best ? 'encontrado' : 'nenhum'}`;
+    }
+
+    async function runGridUI(){
+      const symbol = $('gsSymbol').value.trim().toUpperCase();
+      const interval = $('gsInterval').value;
+      const modelType = $('gsModel').value;
+      const limit = Math.max(260, Number($('gsLimit').value || 1200));
+      const series = await loadSeries(symbol, interval, limit);
+      const res = runGridSearch(symbol, series, defaultGrid(), modelType, {
+        edgeEngineFactory: () => new EdgeEngine(50)
+      });
+      lastGridBest = res?.best || null;
+      renderGridResults(res);
+      if (lastGridBest){
+        logInstitutional({
+          regime: 'GRID',
+          breakoutFlag: true,
+          atrExp: true,
+          volExp: true,
+          momentumScore: null,
+          probability: null,
+          rollingNetExpectancy: lastGridBest.expectancy,
+          edgeTradesCount: Number(lastGridBest.trades || 0),
+          edgeOk: true,
+          decision: 'GRID_DONE',
+          reason: `best expectancy=${Number(lastGridBest.expectancy || 0).toFixed(4)}`,
+          slippageEst: 0
+        });
+      }
+    }
+
+    function applyBestParams(){
+      if (!lastGridBest?.params) return;
+      experimentalState.cfg = mergeExperimentalCfg(experimentalState.cfg, lastGridBest.params);
+      $('gridSummary').textContent = `${$('gridSummary').textContent} · Params aplicados ao experimental cfg`;
+      logInstitutional({
+        regime: 'GRID',
+        breakoutFlag: true,
+        atrExp: true,
+        volExp: true,
+        momentumScore: null,
+        probability: null,
+        rollingNetExpectancy: Number(lastGridBest.expectancy || 0),
+        edgeTradesCount: Number(experimentalState.edgeEngine?.tradesCount || 0),
+        edgeOk: true,
+        decision: 'APPLY_BEST',
+        reason: JSON.stringify(lastGridBest.params),
+        slippageEst: 0
+      });
+    }
+
     $('btnScan').addEventListener('click', runScanner);
     $('btnBacktest').addEventListener('click', runBacktestUI);
+    $('btnRunGrid').addEventListener('click', runGridUI);
+    $('btnApplyBest').addEventListener('click', applyBestParams);
     setInterval(() => { $('labClock').textContent = new Date().toLocaleTimeString('pt-BR',{hour12:false}); }, 1000);
     runScanner();
   </script>
 </body>
 </html>
+

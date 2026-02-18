@@ -1,4 +1,5 @@
-import { buildAtrSeries, detectRegime } from './momentumModel.js';
+import { buildAtrSeries, breakoutSignal, detectRegime } from './momentumModel.js';
+import { DEFAULT_EXPERIMENTAL_CFG, mergeExperimentalCfg } from './experimentalConfig.js';
 
 function meanLast(arr, n, endIdx){
   let sum = 0;
@@ -13,31 +14,22 @@ function meanLast(arr, n, endIdx){
   return count ? (sum / count) : 0;
 }
 
-function triggerAtIndex(data, atrSeries, i){
+function triggerAtIndex(data, atrSeries, i, cfg){
   const sub = {
     c: data.c.slice(0, i + 1),
     h: data.h.slice(0, i + 1),
-    l: data.l.slice(0, i + 1)
+    l: data.l.slice(0, i + 1),
+    v: data.v.slice(0, i + 1)
   };
-  const regimeInfo = detectRegime(sub, { slopeLookback: 80 });
+  const regimeInfo = detectRegime(sub, cfg);
   const regime = regimeInfo.regime;
-
-  const atrNow = Number(atrSeries[i] || 0);
-  const atrMean20 = meanLast(atrSeries, 20, i);
-  const atrExp = atrNow > atrMean20;
-
-  const volNow = Number(data.v[i] || 0);
-  const volMean20 = meanLast(data.v, 20, i);
-  const volExp = volNow > volMean20;
-
-  const breakoutHigh = Math.max(...data.h.slice(Math.max(0, i - 11), i + 1));
-  const breakout = Number(data.h[i] || 0) >= Number(breakoutHigh || 0);
-  const breakoutFlag = breakout && ((atrExp ? 1 : 0) + (volExp ? 1 : 0) >= 1);
-
-  return { regime, breakoutFlag, atrExp, volExp, atrNow };
+  const bo = breakoutSignal(sub, cfg);
+  const atrNow = Number(atrSeries[i] || bo.atrNow || 0);
+  return { regime, breakoutFlag: bo.breakout, atrExp: bo.atrExp, volExp: bo.volExp, atrNow };
 }
 
-function estimateProb2R(data){
+function estimateProb2R(data, cfg){
+  const k = mergeExperimentalCfg(DEFAULT_EXPERIMENTAL_CFG, cfg);
   const n = data.c.length - 1;
   if (n < 320) return { prob: null, occurrences: 0, wins: 0 };
 
@@ -45,24 +37,29 @@ function estimateProb2R(data){
   let occurrences = 0;
   let wins = 0;
 
-  for (let i = 220; i <= n - 50; i++){
-    const t = triggerAtIndex(data, atrSeries, i);
-    if (!(t.regime === 'BULL' && t.breakoutFlag)) continue;
+  const lookAhead = Math.max(10, Number(k.probLookAhead || 50));
+  const probRR = Math.max(1, Number(k.probRR || 2.0));
+  const stopMinPct = Math.max(0, Number(k.stopMinPct || 0.001));
+  const stopAtrMult = Math.max(0.5, Number(k.stopAtrMult || 1.8));
+  for (let i = 220; i <= n - lookAhead - 1; i++){
+    const t = triggerAtIndex(data, atrSeries, i, k);
+    if (t.regime === 'CHOP' || !t.breakoutFlag) continue;
     occurrences += 1;
 
     const entry = Number(data.c[i] || 0);
-    const stopDist = Math.max(1.2 * Number(t.atrNow || 0), 0.001 * entry);
+    const stopDist = Math.max(stopAtrMult * Number(t.atrNow || 0), stopMinPct * entry);
     const stop = entry - stopDist;
-    const tp = entry + (2 * stopDist);
+    const tp = entry + (probRR * stopDist);
 
     let reachedTp = false;
-    for (let j = i + 1; j <= Math.min(n, i + 50); j++){
-      const c = Number(data.c[j] || 0);
-      if (c >= tp){
+    for (let j = i + 1; j <= Math.min(n, i + lookAhead); j++){
+      const hj = Number(data.h[j] || data.c[j] || 0);
+      const lj = Number(data.l[j] || data.c[j] || 0);
+      if (hj >= tp){
         reachedTp = true;
         break;
       }
-      if (c <= stop){
+      if (lj <= stop){
         reachedTp = false;
         break;
       }
@@ -70,11 +67,12 @@ function estimateProb2R(data){
     if (reachedTp) wins += 1;
   }
 
-  if (occurrences < 20) return { prob: null, occurrences, wins };
+  if (occurrences < Number(k.probMinOcc || 30)) return { prob: null, occurrences, wins };
   return { prob: wins / occurrences, occurrences, wins };
 }
 
-export function buildProbabilityDecision(symbol, data){
+export function buildProbabilityDecision(symbol, data, cfg = {}){
+  const k = mergeExperimentalCfg(DEFAULT_EXPERIMENTAL_CFG, cfg);
   const closes = data?.c || [];
   const n = closes.length - 1;
   if (n < 320){
@@ -82,12 +80,12 @@ export function buildProbabilityDecision(symbol, data){
   }
 
   const atrSeries = buildAtrSeries(data.h, data.l, data.c, 14);
-  const now = triggerAtIndex(data, atrSeries, n);
-  const est = estimateProb2R(data);
+  const now = triggerAtIndex(data, atrSeries, n, k);
+  const est = estimateProb2R(data, k);
 
   let reason = 'PROBABILITY_BLOCK';
   let signal = 'HOLD';
-  if (now.regime !== 'BULL') reason = 'REGIME_NOT_BULL';
+  if (now.regime === 'CHOP') reason = 'REGIME_CHOP';
   else if (!now.breakoutFlag) reason = 'BREAKOUT_FAIL';
   else if (est.prob == null) reason = 'PROB_INSUFFICIENT_OCCURRENCES';
   else if (est.prob < 0.55) reason = 'PROB_BELOW_55';
@@ -102,7 +100,7 @@ export function buildProbabilityDecision(symbol, data){
     signal,
     probability: est.prob,
     regime: now.regime,
-    regimeBull: now.regime === 'BULL',
+    regimeBull: now.regime !== 'CHOP',
     breakoutFlag: now.breakoutFlag,
     atrExp: now.atrExp,
     volExp: now.volExp,

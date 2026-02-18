@@ -3,6 +3,8 @@ import { calcFeeUsd, resolveTradeFeePct } from '../js/fees.js';
 import { buildMomentumDecision } from './momentumModel.js';
 import { buildProbabilityDecision } from './probabilityModel.js';
 import { EdgeEngine } from './edgeEngine.js';
+import { DEFAULT_EXPERIMENTAL_CFG, mergeExperimentalCfg } from './experimentalConfig.js';
+import { experimentalState } from './experimentalState.js';
 
 function sliceSeries(series, endIndex){
   return {
@@ -15,9 +17,11 @@ function sliceSeries(series, endIndex){
   };
 }
 
-function selectDecision(modelType, symbol, data, history, localState){
-  if (modelType === 'momentum') return buildMomentumDecision(symbol, data, localState);
-  if (modelType === 'prob') return buildProbabilityDecision(symbol, data, history);
+function selectDecision(modelType, symbol, data, localState){
+  const cfg = localState?.cfg || {};
+  const probDecision = buildProbabilityDecision(symbol, data, cfg);
+  if (modelType === 'momentum') return buildMomentumDecision(symbol, data, localState, probDecision);
+  if (modelType === 'prob') return probDecision;
   return buildDecision(data, { atrPeriod: 14 });
 }
 
@@ -27,14 +31,16 @@ export function runBacktest(symbol, modelType, candles, opts = {}){
     return { symbol, modelType, error: 'Candles insuficientes (min 260).' };
   }
 
-  const feePct = resolveTradeFeePct({ feeMode: 'BNB', feePctCustom: 0.10 });
-  const slippageRate = modelType === 'prob' ? 0.0008 : (modelType === 'momentum' ? 0.0006 : 0.0007);
+  const cfg = mergeExperimentalCfg(DEFAULT_EXPERIMENTAL_CFG, opts?.cfg || experimentalState?.cfg || {});
+  const feeRatePct = Math.max(0, Number(cfg.feeRate || 0.001)) * 100;
+  const feePct = resolveTradeFeePct({ feeMode: 'CUSTOM', feePctCustom: feeRatePct });
+  const slippageRate = Math.max(0, Number(cfg.slippageRate || 0.0006));
   const history = [];
-  const edgeEngine = opts?.edgeEngine || new EdgeEngine(50);
+  const edgeEngine = opts?.edgeEngine || experimentalState?.edgeEngine || new EdgeEngine(50);
   const blockReasons = new Map();
   const localState = {
     edgeEngine,
-    cfg: { edgeMinTrades: Math.max(1, Number(opts?.edgeMinTrades || 30)) }
+    cfg
   };
 
   let equity = 100;
@@ -50,15 +56,15 @@ export function runBacktest(symbol, modelType, candles, opts = {}){
     const low = Number(view.l[view.l.length - 1] || close);
 
     if (!open){
-      const dec = selectDecision(modelType, symbol, view, history, localState);
+      const dec = selectDecision(modelType, symbol, view, localState);
       if (dec?.signal === 'BUY'){
         const atr = Math.max(Number(dec.atr || 0), close * 0.003);
-        const stopDist = Math.max(atr * 1.5, close * 0.004);
+        const stopDist = Math.max(atr * Math.max(0.5, Number(cfg.stopAtrMult || 1.8)), close * Math.max(0, Number(cfg.stopMinPct || 0.001)));
         const riskUsd = Math.max(0.5, equity * 0.01);
         const qty = riskUsd / Math.max(1e-9, stopDist);
         const entry = close;
         const stop = entry - stopDist;
-        const target = entry + (stopDist * 2);
+        const target = entry + (stopDist * Math.max(1, Number(cfg.rTarget || 2.5)));
         const entryNotional = Math.abs(entry * qty);
         const entryFee = calcFeeUsd(entryNotional, feePct);
         const entrySlip = entryNotional * slippageRate;
@@ -158,7 +164,8 @@ export function runBacktest(symbol, modelType, candles, opts = {}){
     equityCurve,
     history,
     edgeNetExpectancy: edgeEngine.netExpectancy,
-    blockReasons: Object.fromEntries(blockReasons.entries())
+    blockReasons: Object.fromEntries(blockReasons.entries()),
+    cfgUsed: cfg
   };
 }
 
