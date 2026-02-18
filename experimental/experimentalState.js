@@ -1,34 +1,4 @@
-export class EdgeEngine {
-  constructor(windowSize = 50){
-    this.windowSize = Math.max(5, Number(windowSize || 50));
-    this.samples = [];
-  }
-
-  recordTrade(trade){
-    if (!trade || !Number.isFinite(Number(trade.netUsd))) return;
-    this.samples.push({
-      ts: Number(trade.ts || Date.now()),
-      netUsd: Number(trade.netUsd),
-      netR: Number(trade.netR || 0),
-      win: Number(trade.netUsd) > 0 ? 1 : 0
-    });
-    if (this.samples.length > this.windowSize){
-      this.samples.splice(0, this.samples.length - this.windowSize);
-    }
-  }
-
-  rollingExpectancy(){
-    if (!this.samples.length) return null;
-    const sum = this.samples.reduce((acc, s) => acc + s.netUsd, 0);
-    return sum / this.samples.length;
-  }
-
-  rollingWinRate(){
-    if (!this.samples.length) return null;
-    const wins = this.samples.reduce((acc, s) => acc + (s.win ? 1 : 0), 0);
-    return wins / this.samples.length;
-  }
-}
+import { EdgeEngine } from './edgeEngine.js';
 
 export const experimentalState = {
   trades: [],
@@ -52,4 +22,3 @@ export function resetExperimentalState(initialEquity = 100){
   experimentalState.scannerRows = [];
   experimentalState.comparatorRows = [];
 }
-

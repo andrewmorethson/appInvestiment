@@ -54,7 +54,7 @@
       font-family:Consolas,monospace;font-size:12px;max-height:250px;overflow:auto;
       background:#0a1320;border:1px solid #25405f;border-radius:8px;padding:8px;
     }
-    .metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+    .metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
     .k{background:#0c1726;border:1px solid #26405e;border-radius:8px;padding:8px}
     .k b{display:block;font-size:17px;margin-top:6px}
     .full{grid-column:1/-1}
@@ -87,7 +87,7 @@
           </select>
         </label>
         <label>Limite candles
-          <input id="limitInput" type="number" min="260" max="1000" value="320" />
+          <input id="limitInput" type="number" min="260" max="1200" value="800" />
         </label>
         <button id="btnScan">Executar Scanner</button>
       </div>
@@ -95,7 +95,7 @@
         <table id="scannerTable">
           <thead>
             <tr>
-              <th>Symbol</th><th>Regime</th><th>Breakout</th><th>Momentum</th><th>Expectancy</th><th>Sinal</th>
+              <th>Symbol</th><th>Regime</th><th>Breakout</th><th>ATRexp</th><th>VolExp</th><th>slopeNorm</th><th>prob2R</th><th>Momentum</th><th>Expectancy</th><th>Sinal</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -144,7 +144,7 @@
             </select>
           </label>
           <label>Limite candles
-            <input id="btLimit" type="number" min="260" max="1000" value="500" />
+          <input id="btLimit" type="number" min="260" max="1200" value="800" />
           </label>
           <button id="btnBacktest">Rodar Backtest</button>
         </div>
@@ -153,6 +153,8 @@
           <div class="k"><span>WinRate</span><b id="mWin">0.00%</b></div>
           <div class="k"><span>Expectancy</span><b id="mExp">$0.00</b></div>
           <div class="k"><span>Max DD</span><b id="mDd">0.00%</b></div>
+          <div class="k"><span>Trades</span><b id="mTrades">0</b></div>
+          <div class="k"><span>Motivo quando 0</span><b id="mBlock">-</b></div>
         </div>
         <div class="full" style="margin-top:10px">
           <canvas id="equityCanvas" width="600" height="220"></canvas>
@@ -207,6 +209,10 @@
           <td>${r.symbol}</td>
           <td>${r.regime}</td>
           <td>${r.breakoutFlag ? 'YES' : 'NO'}</td>
+          <td>${r.atrExp ? 'YES' : 'NO'}</td>
+          <td>${r.volExp ? 'YES' : 'NO'}</td>
+          <td>${Number(r.slopeNorm || 0).toFixed(3)}</td>
+          <td>${r.prob2R == null ? 'N/A' : `${(Number(r.prob2R) * 100).toFixed(1)}%`}</td>
           <td>${Number(r.momentumScore).toFixed(4)}</td>
           <td>${Number(r.rollingNetExpectancy || 0).toFixed(4)}</td>
           <td class="${r.signal === 'BUY' ? 'buy' : 'hold'}">${r.signal}</td>
@@ -221,7 +227,7 @@
           <td>${r.symbol}</td>
           <td>${r.scoreDecision.signal} (${Number(r.scoreDecision.score || 0).toFixed(2)})</td>
           <td>${r.momentumDecision.signal} (${Number(r.momentumDecision.score || 0).toFixed(2)})</td>
-          <td>${r.probDecision.signal} (${(Number(r.probDecision.probability || 0) * 100).toFixed(1)}%)</td>
+          <td>${r.probDecision.signal} (${r.probDecision.probability == null ? 'N/A' : `${(Number(r.probDecision.probability) * 100).toFixed(1)}%`})</td>
           <td><b>${r.best}</b></td>
         </tr>
       `).join('');
@@ -230,17 +236,17 @@
     async function runScanner(){
       const symbols = $('symbolsInput').value.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
       const interval = $('intervalInput').value;
-      const limit = Math.max(260, Number($('limitInput').value || 320));
+      const limit = Math.max(260, Number($('limitInput').value || 800));
 
       const scannerRows = [];
       const comparatorRows = [];
       for (const symbol of symbols){
         try{
           const series = await loadSeries(symbol, interval, limit);
-          const mom = buildMomentumDecision(symbol, series, experimentalState);
-          scannerRows.push(mom);
-
           const cmp = compareModels(symbol, series, experimentalState);
+          const mom = buildMomentumDecision(symbol, series, experimentalState);
+          const prob2R = cmp.probDecision?.prob2R ?? cmp.probDecision?.probability ?? null;
+          scannerRows.push({ ...mom, prob2R });
           comparatorRows.push(cmp);
 
           if (mom.signal === 'BUY' || cmp.probDecision.signal === 'BUY'){
@@ -248,7 +254,7 @@
               regime: mom.regime,
               breakoutFlag: mom.breakoutFlag,
               momentumScore: mom.momentumScore,
-              probability: cmp.probDecision.probability,
+              probability: prob2R,
               rollingNetExpectancy: mom.rollingNetExpectancy,
               slippageEst: 0.0006
             });
@@ -277,7 +283,7 @@
       const symbol = $('btSymbol').value.trim().toUpperCase();
       const interval = $('btInterval').value;
       const modelType = $('btModel').value;
-      const limit = Math.max(260, Number($('btLimit').value || 500));
+      const limit = Math.max(260, Number($('btLimit').value || 800));
 
       const series = await loadSeries(symbol, interval, limit);
       const result = runBacktest(symbol, modelType, series);
@@ -289,6 +295,11 @@
       $('mWin').textContent = fmtPct(result.winRate);
       $('mExp').textContent = fmtUsd(result.expectancy);
       $('mDd').textContent = fmtPct(result.maxDD);
+      $('mTrades').textContent = String(result.trades || 0);
+      const block = (result.trades || 0) > 0
+        ? '-'
+        : Object.entries(result.blockReasons || {}).sort((a,b)=>b[1]-a[1])[0]?.[0] || 'NO_SIGNAL';
+      $('mBlock').textContent = block;
       drawEquityCurve($('equityCanvas'), result.equityCurve);
       logInstitutional({
         regime: 'BACKTEST',
@@ -307,4 +318,3 @@
   </script>
 </body>
 </html>
-

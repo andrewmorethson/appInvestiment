@@ -1,76 +1,114 @@
-import { SMA } from '../js/indicators.js';
+import { buildAtrSeries, detectRegime } from './momentumModel.js';
 
-function buildAtrSeries(highs, lows, closes, period = 14){
-  const p = Math.max(2, Number(period || 14));
-  const out = new Array(closes.length).fill(null);
-  if (!Array.isArray(closes) || closes.length < p + 1) return out;
-  const trs = [];
-  for (let i = 1; i < closes.length; i++){
-    const h = Number(highs[i] || 0);
-    const l = Number(lows[i] || 0);
-    const pc = Number(closes[i - 1] || 0);
-    trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
-  }
+function meanLast(arr, n, endIdx){
   let sum = 0;
-  for (let i = 0; i < p; i++) sum += trs[i];
-  let atr = sum / p;
-  out[p] = atr;
-  for (let i = p; i < trs.length; i++){
-    atr = ((atr * (p - 1)) + trs[i]) / p;
-    out[i + 1] = atr;
-  }
-  return out;
-}
-
-export function buildProbabilityDecision(symbol, data, history){
-  const closes = data?.c || [];
-  const highs = data?.h || [];
-  const lows = data?.l || [];
-  const n = closes.length - 1;
-  if (n < 220){
-    return { model: 'PROBABILITY', symbol, signal: 'HOLD', probability: 0, reason: 'INSUFFICIENT_DATA' };
-  }
-
-  const ma200 = SMA(closes, 200);
-  const m200 = Number(ma200[n] || 0);
-  const m200Prev = Number(ma200[Math.max(0, n - 5)] || 0);
-  const regimeBull = Number(closes[n] || 0) > m200 && m200 > m200Prev;
-
-  const atrSeries = buildAtrSeries(highs, lows, closes, 14);
-  const atrNow = Number(atrSeries[n] || 0);
-  let atrAvg20 = 0;
-  let atrCount = 0;
-  for (let i = Math.max(0, n - 19); i <= n; i++){
-    const v = Number(atrSeries[i]);
-    if (Number.isFinite(v) && v > 0){
-      atrAvg20 += v;
-      atrCount += 1;
+  let count = 0;
+  for (let i = Math.max(0, endIdx - n + 1); i <= endIdx; i++){
+    const v = Number(arr[i]);
+    if (Number.isFinite(v)){
+      sum += v;
+      count += 1;
     }
   }
-  atrAvg20 = atrCount ? (atrAvg20 / atrCount) : atrNow;
-  const atrExp = atrNow > atrAvg20;
+  return count ? (sum / count) : 0;
+}
 
-  const prevHigh = Math.max(...highs.slice(Math.max(0, n - 20), n));
-  const breakoutFlag = Number(closes[n] || 0) > Number(prevHigh || 0);
+function triggerAtIndex(data, atrSeries, i){
+  const sub = {
+    c: data.c.slice(0, i + 1),
+    h: data.h.slice(0, i + 1),
+    l: data.l.slice(0, i + 1)
+  };
+  const regimeInfo = detectRegime(sub, { slopeLookback: 80 });
+  const regime = regimeInfo.regime;
 
-  const hist = Array.isArray(history) ? history : [];
-  const cond = hist.filter((t) => t?.regimeBull && t?.breakoutFlag && t?.atrExp);
-  const wins = cond.filter((t) => Number(t?.netR || 0) >= 2).length;
-  const total = cond.length;
-  const probability = (wins + 1) / (total + 2); // Laplace smoothing
+  const atrNow = Number(atrSeries[i] || 0);
+  const atrMean20 = meanLast(atrSeries, 20, i);
+  const atrExp = atrNow > atrMean20;
 
-  const signal = (regimeBull && breakoutFlag && atrExp && probability > 0.55) ? 'BUY' : 'HOLD';
+  const volNow = Number(data.v[i] || 0);
+  const volMean20 = meanLast(data.v, 20, i);
+  const volExp = volNow > volMean20;
+
+  const breakoutHigh = Math.max(...data.h.slice(Math.max(0, i - 11), i + 1));
+  const breakout = Number(data.h[i] || 0) >= Number(breakoutHigh || 0);
+  const breakoutFlag = breakout && ((atrExp ? 1 : 0) + (volExp ? 1 : 0) >= 1);
+
+  return { regime, breakoutFlag, atrExp, volExp, atrNow };
+}
+
+function estimateProb2R(data){
+  const n = data.c.length - 1;
+  if (n < 320) return { prob: null, occurrences: 0, wins: 0 };
+
+  const atrSeries = buildAtrSeries(data.h, data.l, data.c, 14);
+  let occurrences = 0;
+  let wins = 0;
+
+  for (let i = 220; i <= n - 50; i++){
+    const t = triggerAtIndex(data, atrSeries, i);
+    if (!(t.regime === 'BULL' && t.breakoutFlag)) continue;
+    occurrences += 1;
+
+    const entry = Number(data.c[i] || 0);
+    const stopDist = Math.max(1.2 * Number(t.atrNow || 0), 0.001 * entry);
+    const stop = entry - stopDist;
+    const tp = entry + (2 * stopDist);
+
+    let reachedTp = false;
+    for (let j = i + 1; j <= Math.min(n, i + 50); j++){
+      const c = Number(data.c[j] || 0);
+      if (c >= tp){
+        reachedTp = true;
+        break;
+      }
+      if (c <= stop){
+        reachedTp = false;
+        break;
+      }
+    }
+    if (reachedTp) wins += 1;
+  }
+
+  if (occurrences < 20) return { prob: null, occurrences, wins };
+  return { prob: wins / occurrences, occurrences, wins };
+}
+
+export function buildProbabilityDecision(symbol, data){
+  const closes = data?.c || [];
+  const n = closes.length - 1;
+  if (n < 320){
+    return { model: 'PROBABILITY', symbol, signal: 'HOLD', probability: null, reason: 'INSUFFICIENT_DATA' };
+  }
+
+  const atrSeries = buildAtrSeries(data.h, data.l, data.c, 14);
+  const now = triggerAtIndex(data, atrSeries, n);
+  const est = estimateProb2R(data);
+
+  let reason = 'PROBABILITY_BLOCK';
+  let signal = 'HOLD';
+  if (now.regime !== 'BULL') reason = 'REGIME_NOT_BULL';
+  else if (!now.breakoutFlag) reason = 'BREAKOUT_FAIL';
+  else if (est.prob == null) reason = 'PROB_INSUFFICIENT_OCCURRENCES';
+  else if (est.prob < 0.55) reason = 'PROB_BELOW_55';
+  else {
+    reason = 'PROBABILITY_EDGE';
+    signal = 'BUY';
+  }
 
   return {
     model: 'PROBABILITY',
     symbol,
     signal,
-    probability,
-    regimeBull,
-    breakoutFlag,
-    atrExp,
-    sampleSize: total,
-    reason: signal === 'BUY' ? 'PROBABILITY_EDGE' : 'PROBABILITY_BLOCK'
+    probability: est.prob,
+    regime: now.regime,
+    regimeBull: now.regime === 'BULL',
+    breakoutFlag: now.breakoutFlag,
+    atrExp: now.atrExp,
+    volExp: now.volExp,
+    sampleSize: est.occurrences,
+    wins2R: est.wins,
+    prob2R: est.prob,
+    reason
   };
 }
-

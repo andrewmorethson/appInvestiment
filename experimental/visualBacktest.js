@@ -2,6 +2,7 @@ import { buildDecision } from '../js/engine.js';
 import { calcFeeUsd, resolveTradeFeePct } from '../js/fees.js';
 import { buildMomentumDecision } from './momentumModel.js';
 import { buildProbabilityDecision } from './probabilityModel.js';
+import { EdgeEngine } from './edgeEngine.js';
 
 function sliceSeries(series, endIndex){
   return {
@@ -29,16 +30,10 @@ export function runBacktest(symbol, modelType, candles){
   const feePct = resolveTradeFeePct({ feeMode: 'BNB', feePctCustom: 0.10 });
   const slippageRate = modelType === 'prob' ? 0.0008 : (modelType === 'momentum' ? 0.0006 : 0.0007);
   const history = [];
+  const edgeEngine = new EdgeEngine(50);
+  const blockReasons = new Map();
   const localState = {
-    edgeEngine: {
-      rollingExpectancy: () => {
-        if (!history.length) return 0;
-        const arr = history.slice(-50);
-        const sum = arr.reduce((acc, x) => acc + Number(x.netUsd || 0), 0);
-        return sum / arr.length;
-      },
-      samples: history.slice(-50)
-    }
+    edgeEngine
   };
 
   let equity = 100;
@@ -79,6 +74,9 @@ export function runBacktest(symbol, modelType, candles){
           breakoutFlag: !!dec.breakoutFlag,
           atrExp: !!dec.atrExp
         };
+      } else {
+        const key = String(dec?.reason || 'NO_SIGNAL');
+        blockReasons.set(key, Number(blockReasons.get(key) || 0) + 1);
       }
     }
 
@@ -110,6 +108,7 @@ export function runBacktest(symbol, modelType, candles){
           breakoutFlag: open.breakoutFlag,
           atrExp: open.atrExp
         });
+        edgeEngine.addTrade({ netPnL: net });
         open = null;
       }
     }
@@ -118,6 +117,27 @@ export function runBacktest(symbol, modelType, candles){
     const dd = (highWatermark - equity) / Math.max(1e-9, highWatermark);
     maxDD = Math.max(maxDD, dd);
     equityCurve.push({ x: i, y: equity });
+  }
+
+  if (open){
+    const closeLast = Number(candles.c[len - 1] || open.entry);
+    const gross = (closeLast - open.entry) * open.qty;
+    const exitNotional = Math.abs(closeLast * open.qty);
+    const exitFee = calcFeeUsd(exitNotional, feePct);
+    const exitSlip = exitNotional * slippageRate;
+    const net = gross - (exitFee + exitSlip);
+    equity += net;
+    history.push({
+      ts: Date.now() + len,
+      netUsd: net,
+      netR: net / Math.max(1e-9, open.riskUsd),
+      exitReason: 'FORCED_EOD',
+      regimeBull: open.regimeBull,
+      breakoutFlag: open.breakoutFlag,
+      atrExp: open.atrExp
+    });
+    edgeEngine.addTrade({ netPnL: net });
+    open = null;
   }
 
   const wins = history.filter((t) => Number(t.netUsd || 0) > 0).length;
@@ -135,7 +155,9 @@ export function runBacktest(symbol, modelType, candles){
     expectancy,
     maxDD,
     equityCurve,
-    history
+    history,
+    edgeNetExpectancy: edgeEngine.netExpectancy,
+    blockReasons: Object.fromEntries(blockReasons.entries())
   };
 }
 
@@ -165,4 +187,3 @@ export function drawEquityCurve(canvas, curve){
   }
   ctx.stroke();
 }
-
