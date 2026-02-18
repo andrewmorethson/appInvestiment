@@ -126,7 +126,7 @@ export function nearBreakout(data, lookback = 12, nearPct = 0.002){
   return { nearBreakout: nearBreakoutFlag, distToBreakoutPct, maxHigh, highNow };
 }
 
-export function scanRank(rows){
+export function scanRank(rows, _opts = {}){
   return [...(rows || [])].sort((a, b) => {
     const da = Number.isFinite(Number(a?.distToBreakoutPct)) ? Number(a.distToBreakoutPct) : Number.POSITIVE_INFINITY;
     const db = Number.isFinite(Number(b?.distToBreakoutPct)) ? Number(b.distToBreakoutPct) : Number.POSITIVE_INFINITY;
@@ -137,11 +137,24 @@ export function scanRank(rows){
   });
 }
 
-export function buildMomentumDecision(symbol, data, localState, probDecision = null){
+export function buildMomentumDecision(symbol, data, localState, probDecision = null, opts = {}){
   const k = mergeExperimentalCfg(DEFAULT_EXPERIMENTAL_CFG, localState?.cfg || {});
   const closes = data?.c || [];
   const n = closes.length - 1;
+  const noGates = Boolean(opts?.noGates ?? localState?.noGates);
   if (n < 320){
+    if (noGates){
+      return {
+        model: 'MOMENTUM',
+        symbol,
+        signal: 'BUY',
+        score: 100,
+        confidence: 1,
+        reason: 'NO_GATES_TEST_MODE',
+        decision: { side: 'BUY', reason: 'NO_GATES_TEST_MODE' },
+        meta: { regime: 'N/A', breakout: false, atrExp: false, volExp: false, momentum: null, slopeNorm: null, edgeOk: true }
+      };
+    }
     return { model: 'MOMENTUM', symbol, signal: 'HOLD', reason: 'INSUFFICIENT_DATA', score: 0 };
   }
 
@@ -161,6 +174,43 @@ export function buildMomentumDecision(symbol, data, localState, probDecision = n
 
   const prob2R = probDecision?.prob2R ?? probDecision?.probability ?? null;
   const probOk = (prob2R != null) && Number(prob2R) >= 0.55;
+
+  if (noGates){
+    return {
+      model: 'MOMENTUM',
+      symbol,
+      signal: 'BUY',
+      score: 100,
+      confidence: 1,
+      regime,
+      regimeBull: regime === 'BULL',
+      slopeNorm,
+      breakoutFlag: bo.breakout,
+      breakout: bo.breakout,
+      atrExp: bo.atrExp,
+      volExp: bo.volExp,
+      expCount: bo.expCount,
+      momentumScore,
+      prob2R,
+      probOk: true,
+      rollingNetExpectancy,
+      edgeTradesCount: tradesCount,
+      edgeMinTrades,
+      edgeOk: true,
+      atr: bo.atrNow,
+      reason: 'NO_GATES_TEST_MODE',
+      decision: { side: 'BUY', reason: 'NO_GATES_TEST_MODE' },
+      meta: {
+        regime,
+        breakout: bo.breakout,
+        atrExp: bo.atrExp,
+        volExp: bo.volExp,
+        momentum: momentumScore,
+        slopeNorm,
+        edgeOk: true
+      }
+    };
+  }
 
   let score = 0;
   if (regime === 'BULL') score += 35;

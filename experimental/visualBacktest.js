@@ -17,10 +17,12 @@ function sliceSeries(series, endIndex){
   };
 }
 
-function selectDecision(modelType, symbol, data, localState){
+function selectDecision(modelType, symbol, data, localState, opts = {}){
   const cfg = localState?.cfg || {};
-  const probDecision = buildProbabilityDecision(symbol, data, cfg);
-  if (modelType === 'momentum') return buildMomentumDecision(symbol, data, localState, probDecision);
+  const noGates = Boolean(opts?.noGates);
+  const fastMode = Boolean(opts?.fastMode);
+  const probDecision = buildProbabilityDecision(symbol, data, cfg, { noGates, fastMode });
+  if (modelType === 'momentum') return buildMomentumDecision(symbol, data, { ...(localState || {}), noGates }, probDecision, { noGates });
   if (modelType === 'prob') return probDecision;
   return buildDecision(data, { atrPeriod: 14 });
 }
@@ -37,6 +39,9 @@ export function runBacktest(symbol, modelType, candles, opts = {}){
   const slippageRate = Math.max(0, Number(cfg.slippageRate || 0.0006));
   const history = [];
   const edgeEngine = opts?.edgeEngine || experimentalState?.edgeEngine || new EdgeEngine(50);
+  const noGates = Boolean(opts?.noGates);
+  const fastMode = Boolean(opts?.fastMode);
+  const maxTradesPerBacktest = Math.max(1, Number(opts?.maxTradesPerBacktest || 30));
   const blockReasons = new Map();
   const localState = {
     edgeEngine,
@@ -47,6 +52,7 @@ export function runBacktest(symbol, modelType, candles, opts = {}){
   let highWatermark = 100;
   let maxDD = 0;
   let open = null;
+  let openedTrades = 0;
   const equityCurve = [{ x: 0, y: equity }];
 
   for (let i = 220; i < len; i++){
@@ -56,8 +62,11 @@ export function runBacktest(symbol, modelType, candles, opts = {}){
     const low = Number(view.l[view.l.length - 1] || close);
 
     if (!open){
-      const dec = selectDecision(modelType, symbol, view, localState);
-      if (dec?.signal === 'BUY'){
+      const dec = selectDecision(modelType, symbol, view, localState, { noGates, fastMode });
+      if (openedTrades >= maxTradesPerBacktest){
+        const key = 'MAX_TRADES_REACHED';
+        blockReasons.set(key, Number(blockReasons.get(key) || 0) + 1);
+      } else if (dec?.signal === 'BUY' || dec?.signal === 'BUY_TEST'){
         const atr = Math.max(Number(dec.atr || 0), close * 0.003);
         const stopDist = Math.max(atr * Math.max(0.5, Number(cfg.stopAtrMult || 1.8)), close * Math.max(0, Number(cfg.stopMinPct || 0.001)));
         const riskUsd = Math.max(0.5, equity * 0.01);
@@ -81,6 +90,7 @@ export function runBacktest(symbol, modelType, candles, opts = {}){
           breakoutFlag: !!dec.breakoutFlag,
           atrExp: !!dec.atrExp
         };
+        openedTrades += 1;
       } else {
         const key = String(dec?.reason || 'NO_SIGNAL');
         blockReasons.set(key, Number(blockReasons.get(key) || 0) + 1);

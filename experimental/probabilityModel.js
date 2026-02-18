@@ -71,11 +71,30 @@ function estimateProb2R(data, cfg){
   return { prob: wins / occurrences, occurrences, wins };
 }
 
-export function buildProbabilityDecision(symbol, data, cfg = {}){
+export function buildProbabilityDecision(symbol, data, cfg = {}, opts = {}){
   const k = mergeExperimentalCfg(DEFAULT_EXPERIMENTAL_CFG, cfg);
+  const noGates = Boolean(opts?.noGates);
+  const fastMode = Boolean(opts?.fastMode);
   const closes = data?.c || [];
   const n = closes.length - 1;
+  if (fastMode){
+    return {
+      model: 'PROBABILITY',
+      symbol,
+      signal: noGates ? 'BUY' : 'HOLD',
+      probability: null,
+      prob2R: null,
+      occ: null,
+      succ: null,
+      sampleSize: null,
+      wins2R: null,
+      reason: noGates ? 'NO_GATES_TEST_MODE' : 'FAST_MODE_DISABLED'
+    };
+  }
   if (n < 320){
+    if (noGates){
+      return { model: 'PROBABILITY', symbol, signal: 'BUY', probability: null, prob2R: null, occ: null, succ: null, reason: 'NO_GATES_TEST_MODE' };
+    }
     return { model: 'PROBABILITY', symbol, signal: 'HOLD', probability: null, reason: 'INSUFFICIENT_DATA' };
   }
 
@@ -85,7 +104,10 @@ export function buildProbabilityDecision(symbol, data, cfg = {}){
 
   let reason = 'PROBABILITY_BLOCK';
   let signal = 'HOLD';
-  if (now.regime === 'CHOP') reason = 'REGIME_CHOP';
+  if (noGates){
+    reason = 'NO_GATES_TEST_MODE';
+    signal = 'BUY';
+  } else if (now.regime === 'CHOP') reason = 'REGIME_CHOP';
   else if (!now.breakoutFlag) reason = 'BREAKOUT_FAIL';
   else if (est.prob == null) reason = 'PROB_INSUFFICIENT_OCCURRENCES';
   else if (est.prob < 0.55) reason = 'PROB_BELOW_55';

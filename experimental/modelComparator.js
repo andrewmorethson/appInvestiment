@@ -10,8 +10,10 @@ function scoreToConfidence(scoreDecision){
 
 function pickBest(scoreDecision, momentumDecision, probDecision){
   const scoreConf = scoreToConfidence(scoreDecision);
-  const momConf = momentumDecision.signal === 'BUY' ? Number(momentumDecision.confidence || 0) : 0;
-  const probConf = probDecision.signal === 'BUY' ? Number(probDecision.probability || 0) : 0;
+  const momConf = (momentumDecision.signal === 'BUY' || momentumDecision.signal === 'BUY_TEST')
+    ? Number(momentumDecision.confidence || 0.8) : 0;
+  const probConf = (probDecision.signal === 'BUY' || probDecision.signal === 'BUY_TEST')
+    ? (Number.isFinite(Number(probDecision.probability)) ? Number(probDecision.probability) : 0.55) : 0;
   const ranked = [
     { name: 'Score Model', conf: scoreConf },
     { name: 'Momentum Model', conf: momConf },
@@ -21,11 +23,13 @@ function pickBest(scoreDecision, momentumDecision, probDecision){
   return ranked[0].name;
 }
 
-export function compareModels(symbol, data, localState){
+export function compareModels(symbol, data, localState, opts = {}){
   const cfg = localState?.cfg || {};
+  const noGates = Boolean(opts?.noGates);
+  const fastMode = Boolean(opts?.disableProbScan);
   const scoreDecision = buildDecision(data, { atrPeriod: 14 });
-  const probDecision = buildProbabilityDecision(symbol, data, cfg);
-  const momentumDecision = buildMomentumDecision(symbol, data, localState, probDecision);
+  const probDecision = buildProbabilityDecision(symbol, data, cfg, { noGates, fastMode });
+  const momentumDecision = buildMomentumDecision(symbol, data, { ...(localState || {}), noGates }, probDecision, { noGates });
   const best = pickBest(scoreDecision, momentumDecision, probDecision);
   return {
     symbol,
