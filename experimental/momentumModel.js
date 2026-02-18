@@ -7,6 +7,16 @@ function pctChange(a, b){
   return (y - x) / x;
 }
 
+export function calculateMomentumScore(closes){
+  const n = (closes?.length || 0) - 1;
+  if (n < 60) return null;
+  const price = Number(closes[n] || 0);
+  const mom30 = pctChange(closes[Math.max(0, n - 30)], price);
+  const mom14 = pctChange(closes[Math.max(0, n - 14)], price);
+  const mom7 = pctChange(closes[Math.max(0, n - 7)], price);
+  return (mom30 * 0.5) + (mom14 * 0.3) + (mom7 * 0.2);
+}
+
 export function buildAtrSeries(highs, lows, closes, period = 14){
   const p = Math.max(2, Number(period || 14));
   const out = new Array(closes.length).fill(null);
@@ -96,23 +106,23 @@ export function buildMomentumDecision(symbol, data, localState){
   const expansionsCount = Number(atrExp ? 1 : 0) + Number(volExp ? 1 : 0);
   const breakoutPass = breakout && expansionsCount >= 1;
 
-  const price = Number(closes[n] || 0);
-  const mom30 = pctChange(closes[Math.max(0, n - 30)], price);
-  const mom14 = pctChange(closes[Math.max(0, n - 14)], price);
-  const mom7 = pctChange(closes[Math.max(0, n - 7)], price);
-  const momentumScore = (mom30 * 0.5) + (mom14 * 0.3) + (mom7 * 0.2);
+  const momentumScore = calculateMomentumScore(closes);
 
   const edgeEngine = localState?.edgeEngine;
+  const cfg = localState?.cfg || {};
+  const edgeMinTrades = Math.max(1, Number(cfg.edgeMinTrades || 30));
   const tradesCount = Number(edgeEngine?.tradesCount || 0);
   const rollingNetExpectancy = Number(edgeEngine?.rollingExpectancy?.() ?? 0);
-  const edgeOk = tradesCount < 20 ? true : (rollingNetExpectancy > 0);
+  const edgeOk = (tradesCount < edgeMinTrades) || (rollingNetExpectancy > 0);
 
   let score = 0;
   if (regime === 'BULL') score += 35;
   if (breakout) score += 20;
   if (atrExp) score += 10;
   if (volExp) score += 10;
-  score += Math.max(0, Math.min(25, momentumScore * 350));
+  if (momentumScore != null){
+    score += Math.max(0, Math.min(25, momentumScore * 350));
+  }
   score += edgeOk ? 5 : 0;
 
   let blockReason = 'NONE';
@@ -120,6 +130,7 @@ export function buildMomentumDecision(symbol, data, localState){
   else if (regime !== 'BULL') blockReason = 'REGIME_NON_BULL';
   else if (!breakoutPass) blockReason = 'BREAKOUT_2OF3_FAIL';
   else if (!edgeOk) blockReason = 'EDGE_NEGATIVE';
+  else if (momentumScore == null) blockReason = 'MOMENTUM_NA';
   else if (momentumScore <= 0) blockReason = 'MOMENTUM_WEAK';
 
   const signal = blockReason === 'NONE' ? 'BUY' : 'HOLD';
@@ -139,6 +150,8 @@ export function buildMomentumDecision(symbol, data, localState){
     volExp,
     momentumScore,
     rollingNetExpectancy,
+    edgeTradesCount: tradesCount,
+    edgeMinTrades,
     edgeOk,
     atr: atrNow,
     reason: signal === 'BUY' ? 'MOMENTUM_SETUP' : blockReason

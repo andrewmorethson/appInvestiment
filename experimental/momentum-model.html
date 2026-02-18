@@ -95,7 +95,7 @@
         <table id="scannerTable">
           <thead>
             <tr>
-              <th>Symbol</th><th>Regime</th><th>Breakout</th><th>ATRexp</th><th>VolExp</th><th>slopeNorm</th><th>prob2R</th><th>Momentum</th><th>Expectancy</th><th>Sinal</th>
+              <th>Symbol</th><th>Regime</th><th>Breakout</th><th>ATRexp</th><th>VolExp</th><th>slopeNorm</th><th>prob2R</th><th>ProbOcc</th><th>ProbSucc</th><th>EdgeTrades</th><th>EdgeOk</th><th>Momentum</th><th>Expectancy</th><th>Sinal</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -181,13 +181,20 @@
     const logsPanel = $('logsPanel');
 
     function logInstitutional(payload){
+      const fmtNA = (v, digits = 4) => (v == null || !Number.isFinite(Number(v))) ? 'N/A' : Number(v).toFixed(digits);
       const line = [
         `[${new Date().toLocaleTimeString('pt-BR',{hour12:false})}]`,
         `regime=${payload.regime}`,
         `breakout=${payload.breakoutFlag ? 1 : 0}`,
-        `momentum=${Number(payload.momentumScore || 0).toFixed(4)}`,
-        `prob=${Number(payload.probability || 0).toFixed(4)}`,
-        `rollExp=${Number(payload.rollingNetExpectancy || 0).toFixed(4)}`,
+        `atrExp=${payload.atrExp ? 1 : 0}`,
+        `volExp=${payload.volExp ? 1 : 0}`,
+        `momentum=${fmtNA(payload.momentumScore)}`,
+        `prob2R=${fmtNA(payload.probability)}`,
+        `rollExp=${fmtNA(payload.rollingNetExpectancy)}`,
+        `edgeTrades=${Number(payload.edgeTradesCount || 0)}`,
+        `edgeOk=${payload.edgeOk ? 1 : 0}`,
+        `decision=${payload.decision || 'HOLD'}`,
+        `reason=${payload.reason || 'NA'}`,
         `slippage=${Number(payload.slippageEst || 0).toFixed(6)}`
       ].join(' ');
       experimentalState.logs.unshift(line);
@@ -204,6 +211,7 @@
 
     function renderScanner(rows){
       const tbody = $('scannerTable').querySelector('tbody');
+      const fmtNA = (v, digits = 4) => (v == null || !Number.isFinite(Number(v))) ? 'N/A' : Number(v).toFixed(digits);
       tbody.innerHTML = rows.map((r) => `
         <tr>
           <td>${r.symbol}</td>
@@ -213,7 +221,11 @@
           <td>${r.volExp ? 'YES' : 'NO'}</td>
           <td>${Number(r.slopeNorm || 0).toFixed(3)}</td>
           <td>${r.prob2R == null ? 'N/A' : `${(Number(r.prob2R) * 100).toFixed(1)}%`}</td>
-          <td>${Number(r.momentumScore).toFixed(4)}</td>
+          <td>${Number(r.probOcc || 0)}</td>
+          <td>${Number(r.probSucc || 0)}</td>
+          <td>${Number(r.edgeTradesCount || 0)}</td>
+          <td>${r.edgeOk ? 'YES' : 'NO'}</td>
+          <td>${fmtNA(r.momentumScore)}</td>
           <td>${Number(r.rollingNetExpectancy || 0).toFixed(4)}</td>
           <td class="${r.signal === 'BUY' ? 'buy' : 'hold'}">${r.signal}</td>
         </tr>
@@ -222,11 +234,12 @@
 
     function renderComparator(rows){
       const tbody = $('comparatorTable').querySelector('tbody');
+      const fmtNA = (v, digits = 2) => (v == null || !Number.isFinite(Number(v))) ? 'N/A' : Number(v).toFixed(digits);
       tbody.innerHTML = rows.map((r) => `
         <tr>
           <td>${r.symbol}</td>
-          <td>${r.scoreDecision.signal} (${Number(r.scoreDecision.score || 0).toFixed(2)})</td>
-          <td>${r.momentumDecision.signal} (${Number(r.momentumDecision.score || 0).toFixed(2)})</td>
+          <td>${r.scoreDecision.signal} (${fmtNA(r.scoreDecision.score)})</td>
+          <td>${r.momentumDecision.signal} (${fmtNA(r.momentumDecision.score)})</td>
           <td>${r.probDecision.signal} (${r.probDecision.probability == null ? 'N/A' : `${(Number(r.probDecision.probability) * 100).toFixed(1)}%`})</td>
           <td><b>${r.best}</b></td>
         </tr>
@@ -237,6 +250,7 @@
       const symbols = $('symbolsInput').value.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
       const interval = $('intervalInput').value;
       const limit = Math.max(260, Number($('limitInput').value || 800));
+      experimentalState.cfg = { edgeMinTrades: 30 };
 
       const scannerRows = [];
       const comparatorRows = [];
@@ -246,33 +260,52 @@
           const cmp = compareModels(symbol, series, experimentalState);
           const mom = buildMomentumDecision(symbol, series, experimentalState);
           const prob2R = cmp.probDecision?.prob2R ?? cmp.probDecision?.probability ?? null;
-          scannerRows.push({ ...mom, prob2R });
+          const probOcc = Number(cmp.probDecision?.occ || cmp.probDecision?.sampleSize || 0);
+          const probSucc = Number(cmp.probDecision?.succ || cmp.probDecision?.wins2R || 0);
+          scannerRows.push({ ...mom, prob2R, probOcc, probSucc });
           comparatorRows.push(cmp);
 
-          if (mom.signal === 'BUY' || cmp.probDecision.signal === 'BUY'){
-            logInstitutional({
-              regime: mom.regime,
-              breakoutFlag: mom.breakoutFlag,
-              momentumScore: mom.momentumScore,
-              probability: prob2R,
-              rollingNetExpectancy: mom.rollingNetExpectancy,
-              slippageEst: 0.0006
-            });
-          }
+          logInstitutional({
+            regime: mom.regime,
+            breakoutFlag: mom.breakoutFlag,
+            atrExp: mom.atrExp,
+            volExp: mom.volExp,
+            momentumScore: mom.momentumScore,
+            probability: prob2R,
+            rollingNetExpectancy: mom.rollingNetExpectancy,
+            edgeTradesCount: mom.edgeTradesCount,
+            edgeOk: mom.edgeOk,
+            decision: mom.signal,
+            reason: mom.reason,
+            slippageEst: 0.0006
+          });
         } catch (err){
           logInstitutional({
             regime: 'ERR',
             breakoutFlag: false,
-            momentumScore: 0,
-            probability: 0,
-            rollingNetExpectancy: 0,
+            atrExp: false,
+            volExp: false,
+            momentumScore: null,
+            probability: null,
+            rollingNetExpectancy: null,
+            edgeTradesCount: 0,
+            edgeOk: false,
+            decision: 'HOLD',
+            reason: 'SCANNER_ERROR',
             slippageEst: 0
           });
           console.error(`Erro scanner ${symbol}`, err);
         }
       }
 
-      scannerRows.sort((a, b) => Number(b.momentumScore || 0) - Number(a.momentumScore || 0));
+      scannerRows.sort((a, b) => {
+        const aNull = (a.momentumScore == null || !Number.isFinite(Number(a.momentumScore)));
+        const bNull = (b.momentumScore == null || !Number.isFinite(Number(b.momentumScore)));
+        if (aNull && !bNull) return 1;
+        if (!aNull && bNull) return -1;
+        if (aNull && bNull) return 0;
+        return Number(b.momentumScore) - Number(a.momentumScore);
+      });
       experimentalState.scannerRows = scannerRows;
       experimentalState.comparatorRows = comparatorRows;
       renderScanner(scannerRows);
@@ -286,9 +319,25 @@
       const limit = Math.max(260, Number($('btLimit').value || 800));
 
       const series = await loadSeries(symbol, interval, limit);
-      const result = runBacktest(symbol, modelType, series);
+      const result = runBacktest(symbol, modelType, series, {
+        edgeEngine: experimentalState.edgeEngine,
+        edgeMinTrades: 30
+      });
       if (result.error){
-        logInstitutional({ regime: 'BT_ERR', breakoutFlag: false, momentumScore: 0, probability: 0, rollingNetExpectancy: 0, slippageEst: 0 });
+        logInstitutional({
+          regime: 'BT_ERR',
+          breakoutFlag: false,
+          atrExp: false,
+          volExp: false,
+          momentumScore: null,
+          probability: null,
+          rollingNetExpectancy: null,
+          edgeTradesCount: Number(experimentalState.edgeEngine?.tradesCount || 0),
+          edgeOk: false,
+          decision: 'HOLD',
+          reason: result.error,
+          slippageEst: 0
+        });
         return;
       }
       $('mNet').textContent = fmtUsd(result.netProfit);
@@ -304,9 +353,15 @@
       logInstitutional({
         regime: 'BACKTEST',
         breakoutFlag: true,
-        momentumScore: 0,
-        probability: 0,
+        atrExp: true,
+        volExp: true,
+        momentumScore: null,
+        probability: null,
         rollingNetExpectancy: result.expectancy,
+        edgeTradesCount: Number(experimentalState.edgeEngine?.tradesCount || 0),
+        edgeOk: true,
+        decision: (result.trades || 0) > 0 ? 'RUN_OK' : 'RUN_EMPTY',
+        reason: (result.trades || 0) > 0 ? 'TRADES_GENERATED' : `no signals due to ${block}`,
         slippageEst: modelType === 'momentum' ? 0.0006 : (modelType === 'score' ? 0.0007 : 0.0008)
       });
     }

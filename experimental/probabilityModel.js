@@ -108,6 +108,8 @@ export function buildProbabilityDecision(symbol, data){
     volExp: now.volExp,
     sampleSize: est.occurrences,
     wins2R: est.wins,
+    occ: est.occurrences,
+    succ: est.wins,
     prob2R: est.prob,
     reason
   };

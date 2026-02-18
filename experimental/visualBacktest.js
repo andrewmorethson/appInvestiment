@@ -21,7 +21,7 @@ function selectDecision(modelType, symbol, data, history, localState){
   return buildDecision(data, { atrPeriod: 14 });
 }
 
-export function runBacktest(symbol, modelType, candles){
+export function runBacktest(symbol, modelType, candles, opts = {}){
   const len = candles?.c?.length || 0;
   if (len < 260){
     return { symbol, modelType, error: 'Candles insuficientes (min 260).' };
@@ -30,10 +30,11 @@ export function runBacktest(symbol, modelType, candles){
   const feePct = resolveTradeFeePct({ feeMode: 'BNB', feePctCustom: 0.10 });
   const slippageRate = modelType === 'prob' ? 0.0008 : (modelType === 'momentum' ? 0.0006 : 0.0007);
   const history = [];
-  const edgeEngine = new EdgeEngine(50);
+  const edgeEngine = opts?.edgeEngine || new EdgeEngine(50);
   const blockReasons = new Map();
   const localState = {
-    edgeEngine
+    edgeEngine,
+    cfg: { edgeMinTrades: Math.max(1, Number(opts?.edgeMinTrades || 30)) }
   };
 
   let equity = 100;
