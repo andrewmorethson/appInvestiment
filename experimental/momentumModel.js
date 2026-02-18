@@ -107,6 +107,36 @@ export function breakoutSignal(data, cfg = {}){
   return { breakout: breakoutPass, atrExp, volExp, expCount: expansionsCount, atrNow };
 }
 
+export function nearBreakout(data, lookback = 12, nearPct = 0.002){
+  const highs = data?.h || [];
+  const n = highs.length - 1;
+  if (n < 1){
+    return { nearBreakout: false, distToBreakoutPct: 1, maxHigh: null, highNow: null };
+  }
+  const lb = Math.max(2, Number(lookback || 12));
+  const start = Math.max(0, n - (lb - 1));
+  const window = highs.slice(start, n + 1).map(Number);
+  const maxHigh = window.length ? Math.max(...window) : Number(highs[n] || 0);
+  const highNow = Number(highs[n] || 0);
+  if (!Number.isFinite(maxHigh) || maxHigh <= 0){
+    return { nearBreakout: false, distToBreakoutPct: 1, maxHigh: null, highNow };
+  }
+  const distToBreakoutPct = Math.max(0, (maxHigh - highNow) / maxHigh);
+  const nearBreakoutFlag = highNow >= (maxHigh * (1 - Math.max(0, Number(nearPct || 0.002))));
+  return { nearBreakout: nearBreakoutFlag, distToBreakoutPct, maxHigh, highNow };
+}
+
+export function scanRank(rows){
+  return [...(rows || [])].sort((a, b) => {
+    const da = Number.isFinite(Number(a?.distToBreakoutPct)) ? Number(a.distToBreakoutPct) : Number.POSITIVE_INFINITY;
+    const db = Number.isFinite(Number(b?.distToBreakoutPct)) ? Number(b.distToBreakoutPct) : Number.POSITIVE_INFINITY;
+    if (da !== db) return da - db;
+    const am = Number.isFinite(Number(a?.momentumScore)) ? Number(a.momentumScore) : Number.NEGATIVE_INFINITY;
+    const bm = Number.isFinite(Number(b?.momentumScore)) ? Number(b.momentumScore) : Number.NEGATIVE_INFINITY;
+    return bm - am;
+  });
+}
+
 export function buildMomentumDecision(symbol, data, localState, probDecision = null){
   const k = mergeExperimentalCfg(DEFAULT_EXPERIMENTAL_CFG, localState?.cfg || {});
   const closes = data?.c || [];

@@ -50,6 +50,7 @@
     th{color:#a9c2df;font-weight:600}
     .buy{color:var(--ok);font-weight:700}
     .hold{color:var(--warn);font-weight:700}
+    .watch{color:var(--accent);font-weight:700}
     .log{
       font-family:Consolas,monospace;font-size:12px;max-height:250px;overflow:auto;
       background:#0a1320;border:1px solid #25405f;border-radius:8px;padding:8px;
@@ -89,13 +90,16 @@
         <label>Limite candles
           <input id="limitInput" type="number" min="260" max="1500" value="1200" />
         </label>
+        <label>Near %
+          <input id="nearPctInput" type="number" min="0.0001" max="0.02" step="0.0001" value="0.002" />
+        </label>
         <button id="btnScan">Executar Scanner</button>
       </div>
       <div style="margin-top:10px;overflow:auto">
         <table id="scannerTable">
           <thead>
             <tr>
-              <th>Symbol</th><th>Regime</th><th>Breakout</th><th>ATRexp</th><th>VolExp</th><th>slopeNorm</th><th>prob2R</th><th>ProbOcc</th><th>ProbSucc</th><th>EdgeTrades</th><th>EdgeOk</th><th>Momentum</th><th>Expectancy</th><th>Sinal</th>
+              <th>Symbol</th><th>Regime</th><th>Breakout</th><th>NearBreakout</th><th>DistToBreakout%</th><th>ATRexp</th><th>VolExp</th><th>slopeNorm</th><th>prob2R</th><th>ProbOcc</th><th>ProbSucc</th><th>EdgeTrades</th><th>EdgeOk</th><th>Momentum</th><th>Expectancy</th><th>Sinal</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -211,7 +215,7 @@
   <script type="module">
     import { fetchKlines, parseKlines } from '../js/binance.js';
     import { experimentalState } from './experimentalState.js';
-    import { buildMomentumDecision } from './momentumModel.js';
+    import { nearBreakout, scanRank } from './momentumModel.js';
     import { compareModels } from './modelComparator.js';
     import { runBacktest, drawEquityCurve } from './visualBacktest.js';
     import { runGridSearch, defaultGrid } from './gridSearch.js';
@@ -262,6 +266,8 @@
           <td>${r.symbol}</td>
           <td>${r.regime}</td>
           <td>${r.breakoutFlag ? 'YES' : 'NO'}</td>
+          <td>${r.nearBreakout ? 'YES' : 'NO'}</td>
+          <td>${Number.isFinite(Number(r.distToBreakoutPct)) ? `${(Number(r.distToBreakoutPct) * 100).toFixed(3)}%` : 'N/A'}</td>
           <td>${r.atrExp ? 'YES' : 'NO'}</td>
           <td>${r.volExp ? 'YES' : 'NO'}</td>
           <td>${Number(r.slopeNorm || 0).toFixed(3)}</td>
@@ -272,7 +278,7 @@
           <td>${r.edgeOk ? 'YES' : 'NO'}</td>
           <td>${fmtNA(r.momentumScore)}</td>
           <td>${Number(r.rollingNetExpectancy || 0).toFixed(4)}</td>
-          <td class="${r.signal === 'BUY' ? 'buy' : 'hold'}">${r.signal}</td>
+          <td class="${r.scanSignal === 'BUY' ? 'buy' : (r.scanSignal === 'WATCH' ? 'watch' : 'hold')}">${r.scanSignal || r.signal}</td>
         </tr>
       `).join('');
     }
@@ -295,6 +301,7 @@
       const symbols = $('symbolsInput').value.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
       const interval = $('intervalInput').value;
       const limit = Math.max(260, Number($('limitInput').value || 1200));
+      const nearPct = Math.max(0.0001, Number($('nearPctInput').value || 0.002));
       experimentalState.cfg = mergeExperimentalCfg(DEFAULT_EXPERIMENTAL_CFG, experimentalState.cfg || {});
 
       const scannerRows = [];
@@ -307,9 +314,19 @@
           const prob2R = cmp.probDecision?.prob2R ?? cmp.probDecision?.probability ?? null;
           const probOcc = Number(cmp.probDecision?.occ || cmp.probDecision?.sampleSize || 0);
           const probSucc = Number(cmp.probDecision?.succ || cmp.probDecision?.wins2R || 0);
-          scannerRows.push({ ...mom, prob2R, probOcc, probSucc });
+          const nb = nearBreakout(series, Number(experimentalState.cfg?.breakoutLookback || 12), nearPct);
+          const scanSignal = mom.signal === 'BUY'
+            ? 'BUY'
+            : (nb.nearBreakout && !mom.breakoutFlag ? 'WATCH' : 'HOLD');
+          scannerRows.push({ ...mom, ...nb, prob2R, probOcc, probSucc, scanSignal });
           comparatorRows.push(cmp);
 
+          const holdReason = mom.regime === 'CHOP'
+            ? 'CHOP_BLOCK'
+            : (mom.reason === 'NON_BULL_REQUIRES_PROB' ? 'PROB_FAIL' : 'BREAKOUT_FAIL');
+          const scanReason = scanSignal === 'WATCH'
+            ? `WATCH_NEAR_BREAKOUT + distToBreakoutPct=${Number(nb.distToBreakoutPct || 0).toFixed(6)}`
+            : (scanSignal === 'BUY' ? 'MOMENTUM_SETUP' : holdReason);
           logInstitutional({
             regime: mom.regime,
             breakoutFlag: mom.breakoutFlag,
@@ -320,8 +337,8 @@
             rollingNetExpectancy: mom.rollingNetExpectancy,
             edgeTradesCount: mom.edgeTradesCount,
             edgeOk: mom.edgeOk,
-            decision: mom.signal,
-            reason: mom.reason,
+            decision: scanSignal,
+            reason: scanReason,
             slippageEst: 0.0006
           });
         } catch (err){
@@ -343,17 +360,10 @@
         }
       }
 
-      scannerRows.sort((a, b) => {
-        const aNull = (a.momentumScore == null || !Number.isFinite(Number(a.momentumScore)));
-        const bNull = (b.momentumScore == null || !Number.isFinite(Number(b.momentumScore)));
-        if (aNull && !bNull) return 1;
-        if (!aNull && bNull) return -1;
-        if (aNull && bNull) return 0;
-        return Number(b.momentumScore) - Number(a.momentumScore);
-      });
-      experimentalState.scannerRows = scannerRows;
+      const rankedRows = scanRank(scannerRows);
+      experimentalState.scannerRows = rankedRows;
       experimentalState.comparatorRows = comparatorRows;
-      renderScanner(scannerRows);
+      renderScanner(rankedRows);
       renderComparator(comparatorRows);
     }
 
