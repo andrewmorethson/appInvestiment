@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Guardian Quant - Experimental Lab</title>
+  <style>
+    :root{
+      --bg:#0a1018;
+      --panel:#111b2a;
+      --panel-2:#162437;
+      --line:#2a3f5d;
+      --text:#d9e6f4;
+      --muted:#96a9c1;
+      --ok:#41d497;
+      --warn:#ffc56d;
+      --bad:#ff7979;
+      --accent:#59b7ff;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:"Segoe UI",Tahoma,sans-serif;
+      background:linear-gradient(180deg,#09101a 0%,#0d1522 100%);
+      color:var(--text);
+    }
+    .wrap{max-width:1300px;margin:0 auto;padding:20px}
+    .title{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:16px}
+    .title h1{margin:0;font-size:22px}
+    .title small{color:var(--muted)}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    .card{
+      background:linear-gradient(180deg,var(--panel) 0%,var(--panel-2) 100%);
+      border:1px solid var(--line);
+      border-radius:12px;
+      padding:14px;
+    }
+    .card h2{margin:0 0 10px;font-size:15px;letter-spacing:.4px}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+    label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:12px}
+    input,select,button,textarea{
+      background:#0d1726;border:1px solid #2f4767;color:var(--text);
+      border-radius:8px;padding:8px 10px;font-size:13px;
+    }
+    textarea{min-height:44px;min-width:320px}
+    button{cursor:pointer;background:#173253}
+    button:hover{filter:brightness(1.08)}
+    table{width:100%;border-collapse:collapse;font-size:12px}
+    th,td{border-bottom:1px solid #28405f;padding:7px 6px;text-align:left}
+    th{color:#a9c2df;font-weight:600}
+    .buy{color:var(--ok);font-weight:700}
+    .hold{color:var(--warn);font-weight:700}
+    .log{
+      font-family:Consolas,monospace;font-size:12px;max-height:250px;overflow:auto;
+      background:#0a1320;border:1px solid #25405f;border-radius:8px;padding:8px;
+    }
+    .metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+    .k{background:#0c1726;border:1px solid #26405e;border-radius:8px;padding:8px}
+    .k b{display:block;font-size:17px;margin-top:6px}
+    .full{grid-column:1/-1}
+    canvas{width:100%;height:220px;border:1px solid #24415f;border-radius:8px;background:#0b1320}
+    @media (max-width:980px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="title">
+      <div>
+        <h1>Guardian Quant - Experimental Lab (Isolado)</h1>
+        <small>Ambiente paralelo para pesquisa de modelos sem tocar core.</small>
+      </div>
+      <small id="labClock">--:--:--</small>
+    </div>
+
+    <div class="card">
+      <h2>Scanner Ranking</h2>
+      <div class="row">
+        <label>Symbols (CSV)
+          <textarea id="symbolsInput">BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,ADAUSDT</textarea>
+        </label>
+        <label>Intervalo
+          <select id="intervalInput">
+            <option value="5m">5m</option>
+            <option value="15m" selected>15m</option>
+            <option value="30m">30m</option>
+            <option value="1h">1h</option>
+          </select>
+        </label>
+        <label>Limite candles
+          <input id="limitInput" type="number" min="260" max="1000" value="320" />
+        </label>
+        <button id="btnScan">Executar Scanner</button>
+      </div>
+      <div style="margin-top:10px;overflow:auto">
+        <table id="scannerTable">
+          <thead>
+            <tr>
+              <th>Symbol</th><th>Regime</th><th>Breakout</th><th>Momentum</th><th>Expectancy</th><th>Sinal</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Model Comparator</h2>
+        <div style="overflow:auto">
+          <table id="comparatorTable">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Score Model</th>
+                <th>Momentum Model</th>
+                <th>Prob Model</th>
+                <th>Melhor</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Backtest Runner</h2>
+        <div class="row">
+          <label>Symbol
+            <input id="btSymbol" value="BTCUSDT" />
+          </label>
+          <label>Modelo
+            <select id="btModel">
+              <option value="score">Score Model</option>
+              <option value="momentum" selected>Momentum Model</option>
+              <option value="prob">Prob Model</option>
+            </select>
+          </label>
+          <label>Intervalo
+            <select id="btInterval">
+              <option value="5m">5m</option>
+              <option value="15m" selected>15m</option>
+              <option value="30m">30m</option>
+              <option value="1h">1h</option>
+            </select>
+          </label>
+          <label>Limite candles
+            <input id="btLimit" type="number" min="260" max="1000" value="500" />
+          </label>
+          <button id="btnBacktest">Rodar Backtest</button>
+        </div>
+        <div class="metrics" style="margin-top:10px" id="btMetrics">
+          <div class="k"><span>Net Profit</span><b id="mNet">$0.00</b></div>
+          <div class="k"><span>WinRate</span><b id="mWin">0.00%</b></div>
+          <div class="k"><span>Expectancy</span><b id="mExp">$0.00</b></div>
+          <div class="k"><span>Max DD</span><b id="mDd">0.00%</b></div>
+        </div>
+        <div class="full" style="margin-top:10px">
+          <canvas id="equityCanvas" width="600" height="220"></canvas>
+        </div>
+      </div>
+
+      <div class="card full">
+        <h2>Logs Institucionais</h2>
+        <div class="log" id="logsPanel"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { fetchKlines, parseKlines } from '../js/binance.js';
+    import { experimentalState } from './experimentalState.js';
+    import { buildMomentumDecision } from './momentumModel.js';
+    import { compareModels } from './modelComparator.js';
+    import { runBacktest, drawEquityCurve } from './visualBacktest.js';
+
+    const $ = (id) => document.getElementById(id);
+    const fmtUsd = (n) => (Number(n) || 0).toLocaleString('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2});
+    const fmtPct = (n) => `${(Number(n) * 100).toFixed(2)}%`;
+    const logsPanel = $('logsPanel');
+
+    function logInstitutional(payload){
+      const line = [
+        `[${new Date().toLocaleTimeString('pt-BR',{hour12:false})}]`,
+        `regime=${payload.regime}`,
+        `breakout=${payload.breakoutFlag ? 1 : 0}`,
+        `momentum=${Number(payload.momentumScore || 0).toFixed(4)}`,
+        `prob=${Number(payload.probability || 0).toFixed(4)}`,
+        `rollExp=${Number(payload.rollingNetExpectancy || 0).toFixed(4)}`,
+        `slippage=${Number(payload.slippageEst || 0).toFixed(6)}`
+      ].join(' ');
+      experimentalState.logs.unshift(line);
+      if (experimentalState.logs.length > 300){
+        experimentalState.logs.splice(300);
+      }
+      logsPanel.textContent = experimentalState.logs.join('\n');
+    }
+
+    async function loadSeries(symbol, interval, limit){
+      const kl = await fetchKlines(symbol, interval, limit);
+      return parseKlines(kl);
+    }
+
+    function renderScanner(rows){
+      const tbody = $('scannerTable').querySelector('tbody');
+      tbody.innerHTML = rows.map((r) => `
+        <tr>
+          <td>${r.symbol}</td>
+          <td>${r.regime}</td>
+          <td>${r.breakoutFlag ? 'YES' : 'NO'}</td>
+          <td>${Number(r.momentumScore).toFixed(4)}</td>
+          <td>${Number(r.rollingNetExpectancy || 0).toFixed(4)}</td>
+          <td class="${r.signal === 'BUY' ? 'buy' : 'hold'}">${r.signal}</td>
+        </tr>
+      `).join('');
+    }
+
+    function renderComparator(rows){
+      const tbody = $('comparatorTable').querySelector('tbody');
+      tbody.innerHTML = rows.map((r) => `
+        <tr>
+          <td>${r.symbol}</td>
+          <td>${r.scoreDecision.signal} (${Number(r.scoreDecision.score || 0).toFixed(2)})</td>
+          <td>${r.momentumDecision.signal} (${Number(r.momentumDecision.score || 0).toFixed(2)})</td>
+          <td>${r.probDecision.signal} (${(Number(r.probDecision.probability || 0) * 100).toFixed(1)}%)</td>
+          <td><b>${r.best}</b></td>
+        </tr>
+      `).join('');
+    }
+
+    async function runScanner(){
+      const symbols = $('symbolsInput').value.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+      const interval = $('intervalInput').value;
+      const limit = Math.max(260, Number($('limitInput').value || 320));
+
+      const scannerRows = [];
+      const comparatorRows = [];
+      for (const symbol of symbols){
+        try{
+          const series = await loadSeries(symbol, interval, limit);
+          const mom = buildMomentumDecision(symbol, series, experimentalState);
+          scannerRows.push(mom);
+
+          const cmp = compareModels(symbol, series, experimentalState);
+          comparatorRows.push(cmp);
+
+          if (mom.signal === 'BUY' || cmp.probDecision.signal === 'BUY'){
+            logInstitutional({
+              regime: mom.regime,
+              breakoutFlag: mom.breakoutFlag,
+              momentumScore: mom.momentumScore,
+              probability: cmp.probDecision.probability,
+              rollingNetExpectancy: mom.rollingNetExpectancy,
+              slippageEst: 0.0006
+            });
+          }
+        } catch (err){
+          logInstitutional({
+            regime: 'ERR',
+            breakoutFlag: false,
+            momentumScore: 0,
+            probability: 0,
+            rollingNetExpectancy: 0,
+            slippageEst: 0
+          });
+          console.error(`Erro scanner ${symbol}`, err);
+        }
+      }
+
+      scannerRows.sort((a, b) => Number(b.momentumScore || 0) - Number(a.momentumScore || 0));
+      experimentalState.scannerRows = scannerRows;
+      experimentalState.comparatorRows = comparatorRows;
+      renderScanner(scannerRows);
+      renderComparator(comparatorRows);
+    }
+
+    async function runBacktestUI(){
+      const symbol = $('btSymbol').value.trim().toUpperCase();
+      const interval = $('btInterval').value;
+      const modelType = $('btModel').value;
+      const limit = Math.max(260, Number($('btLimit').value || 500));
+
+      const series = await loadSeries(symbol, interval, limit);
+      const result = runBacktest(symbol, modelType, series);
+      if (result.error){
+        logInstitutional({ regime: 'BT_ERR', breakoutFlag: false, momentumScore: 0, probability: 0, rollingNetExpectancy: 0, slippageEst: 0 });
+        return;
+      }
+      $('mNet').textContent = fmtUsd(result.netProfit);
+      $('mWin').textContent = fmtPct(result.winRate);
+      $('mExp').textContent = fmtUsd(result.expectancy);
+      $('mDd').textContent = fmtPct(result.maxDD);
+      drawEquityCurve($('equityCanvas'), result.equityCurve);
+      logInstitutional({
+        regime: 'BACKTEST',
+        breakoutFlag: true,
+        momentumScore: 0,
+        probability: 0,
+        rollingNetExpectancy: result.expectancy,
+        slippageEst: modelType === 'momentum' ? 0.0006 : (modelType === 'score' ? 0.0007 : 0.0008)
+      });
+    }
+
+    $('btnScan').addEventListener('click', runScanner);
+    $('btnBacktest').addEventListener('click', runBacktestUI);
+    setInterval(() => { $('labClock').textContent = new Date().toLocaleTimeString('pt-BR',{hour12:false}); }, 1000);
+    runScanner();
+  </script>
+</body>
+</html>
+
